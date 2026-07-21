@@ -1,0 +1,20 @@
+ROS_DOMAIN_ID=88
+RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ROS_DISTRO=jazzy
+UBUNTU_VERSION=24.04
+WORK_DIR=<项目根目录，由 open_all.sh 自动识别>
+BUILD_ROOT=~/.cache/huichuan_agv_jazzy_ws
+BUILD_PYTHON=/usr/bin/python3
+BUILD_PYTHON_POLICY=隔离 uv/Conda/用户 site-packages，不在中文物理路径直接 colcon build
+LAUNCH=cartographer_auto_mapping_jazzy_launch.py
+NAV_PROFILE=jazzy_native
+NAV2=Jazzy 原生 State Lattice + Rotation Shim + DWB + Constrained Smoother
+FRONTIER=frontier_exploration_ros2 原生 C++ 节点
+CONFIG=cartographer_2d_v9_tightened.lua
+navi_yaw_sign=1.0 navi_vx_sign=1.0 navi_vz_sign=1.0
+enable_fixed_scan_filter:=true
+LIDAR_BAUD=115200
+CHASSIS_BAUD=115200
+WEB_PORT=5173
+ROSBRIDGE_PORT=9090
+MJPEG_PORT=8080

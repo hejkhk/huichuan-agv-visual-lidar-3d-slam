@@ -1,0 +1,10 @@
+{
+  "mode": "manual",
+  "state": "idle",
+  "gear": 1,
+  "led_color": "green",
+  "speed_cnt_per_sec": 15000000,
+  "battery_voltage": 24.5,
+  "estop": false,
+  "message": "Robot is idle"
+}

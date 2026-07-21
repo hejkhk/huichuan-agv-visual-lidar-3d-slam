@@ -1,0 +1,9 @@
+{
+  "source": "web_console",
+  "command": "stop",
+  "gear": 1,
+  "led_color": "green",
+  "speed_cnt_per_sec": 0,
+  "multiplier": 1,
+  "timestamp_ms": 1710000000000
+}

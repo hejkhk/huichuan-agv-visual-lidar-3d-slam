@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="AGV 局域网建图、导航、视觉避障与底盘调试控制台。" />
+    <title>AGV Mission Console</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"><i data-lucide="route"></i></span>
+          <div>
+            <p class="eyebrow">INOVANCE AGV / LOCAL OPERATIONS</p>
+            <h1>Mission Console</h1>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <div class="connection-summary" aria-label="连接状态">
+            <span id="rosSummary" class="status-pill is-offline"><i data-lucide="radio"></i>ROS 离线</span>
+            <span id="videoSummary" class="status-pill is-offline"><i data-lucide="camera"></i>视频离线</span>
+          </div>
+          <button id="themeToggle" class="icon-button theme-toggle" type="button" title="切换明暗主题" aria-label="切换明暗主题">
+            <i data-lucide="sun"></i>
+          </button>
+        </div>
+      </header>
+
+      <section class="connection-bar" aria-labelledby="connectionTitle">
+        <div class="connection-title">
+          <span class="section-index">00</span>
+          <div><p class="section-kicker">CONNECTION</p><h2 id="connectionTitle">设备连接</h2></div>
+        </div>
+        <div class="connection-grid">
+          <label><span>机器人 IP</span><input id="robotIp" type="text" inputmode="decimal" placeholder="192.168.1.201" /></label>
+          <label><span>视频地址</span><input id="videoUrl" type="url" spellcheck="false" placeholder="http://192.168.1.201:8080/video_feed" /></label>
+          <label><span>ROSBridge</span><input id="rosUrl" type="url" spellcheck="false" placeholder="ws://192.168.1.201:9090" /></label>
+          <div class="connection-actions">
+            <button id="connectVideoButton" class="button button-secondary" type="button"><i data-lucide="video"></i>视频</button>
+            <button id="connectRosButton" class="button button-primary" type="button"><i data-lucide="radio-tower"></i>ROS</button>
+            <button id="disconnectButton" class="icon-button" type="button" title="断开全部连接" aria-label="断开全部连接"><i data-lucide="unplug"></i></button>
+          </div>
+        </div>
+        <p id="connectionMessage" class="inline-message" role="status" aria-live="polite">输入机器人 IP 后自动填充视频与 ROSBridge 地址</p>
+      </section>
+
+      <main class="workspace" aria-label="AGV 控制台">
+        <article id="videoPanel" class="panel camera-panel focusable-panel" aria-labelledby="cameraTitle">
+          <header class="panel-header">
+            <div class="panel-title"><span class="section-index">01</span><div><p class="section-kicker">VISION</p><h2 id="cameraTitle">RGB 与近地避障</h2></div></div>
+            <div class="panel-actions"><span id="videoPanelStatus" class="panel-status">Disconnected</span><button id="videoExpandButton" class="icon-button expand-button" type="button" title="放大 RGB 画面" aria-label="放大 RGB 画面"><i data-lucide="maximize-2"></i></button></div>
+          </header>
+          <div id="videoFrame" class="video-frame">
+            <img id="videoStream" alt="机器人实时 RGB 与避障调试画面" />
+            <div class="video-placeholder"><i data-lucide="camera-off"></i><strong id="videoPlaceholderText">等待相机流</strong><span>MJPEG / HTTP</span></div>
+            <span class="live-badge"><span></span>LIVE</span>
+          </div>
+          <div id="visionDock" class="context-dock vision-dock">
+            <div class="baseline-group">
+              <button id="baselineCaptureButton" class="button button-primary" type="button"><i data-lucide="scan-line"></i>采集深度 Baseline</button>
+              <span id="baselineStatus" class="state-chip is-warning">未标定</span>
+            </div>
+            <div class="toggle-cluster" aria-label="视觉调试开关">
+              <label class="switch-control"><input id="motionSerialToggle" type="checkbox" checked /><span></span><b>串口运动</b></label>
+              <label class="switch-control"><input id="obstacleFillToggle" type="checkbox" /><span></span><b>障碍红点</b></label>
+              <label class="switch-control"><input id="roiBoxToggle" type="checkbox" /><span></span><b>避障框</b></label>
+              <label class="switch-control"><input id="rgbDebugTextToggle" type="checkbox" /><span></span><b>RGB 信息</b></label>
+            </div>
+          </div>
+          <footer class="panel-footer mono"><span>STREAM</span><span id="activeVideoUrl" title="">—</span></footer>
+        </article>
+
+        <article id="mapPanel" class="panel map-panel focusable-panel" aria-labelledby="mapTitle">
+          <header class="panel-header">
+            <div class="panel-title"><span class="section-index">02</span><div><p class="section-kicker">SLAM / NAVIGATION</p><h2 id="mapTitle">实时地图与路径</h2></div></div>
+            <div class="panel-actions">
+              <button id="fitMapButton" class="icon-button" type="button" title="适配地图" aria-label="适配地图" disabled><i data-lucide="scan"></i></button>
+              <button id="resetMapButton" class="icon-button" type="button" title="重置视图" aria-label="重置视图" disabled><i data-lucide="rotate-ccw"></i></button>
+              <button id="mapExpandButton" class="icon-button expand-button" type="button" title="放大地图" aria-label="放大地图"><i data-lucide="maximize-2"></i></button>
+            </div>
+          </header>
+          <div id="mapViewport" class="map-viewport">
+            <canvas id="mapCanvas" aria-label="ROS2 OccupancyGrid 地图"></canvas>
+            <div id="mapPlaceholder" class="map-placeholder"><i data-lucide="map"></i><strong>等待 /map</strong><span>OccupancyGrid</span></div>
+            <div class="map-help">滚轮缩放 · 拖拽平移 · 单击标点</div>
+          </div>
+          <div id="mapDock" class="context-dock map-dock">
+            <div class="goal-readout"><span>目标点</span><strong id="goalReadout">点击地图选择目标点</strong></div>
+            <div class="goal-actions">
+              <button id="autoMappingToggle" class="button button-secondary auto-mapping-toggle" type="button" aria-pressed="false" disabled><i data-lucide="map-pinned"></i>自动建图 OFF</button>
+              <button id="sendGoalButton" class="button button-primary" type="button" disabled><i data-lucide="navigation"></i>开始导航</button>
+              <button id="clearGoalButton" class="button button-secondary" type="button" disabled><i data-lucide="eraser"></i>清除标记</button>
+            </div>
+          </div>
+          <dl class="map-meta mono"><div><dt>RES</dt><dd id="mapResolution">—</dd></div><div><dt>SIZE</dt><dd id="mapSize">—</dd></div><div><dt>UPDATED</dt><dd id="mapUpdated">—</dd></div><div><dt>ZOOM</dt><dd id="mapZoom">100%</dd></div></dl>
+        </article>
+
+        <article class="panel control-panel" aria-labelledby="controlTitle">
+          <header class="panel-header">
+            <div class="panel-title"><span class="section-index">03</span><div><p class="section-kicker">DRIVE</p><h2 id="controlTitle">运动与底盘控制</h2></div></div>
+            <span id="controlLockStatus" class="panel-status warning">等待 ROS</span>
+          </header>
+
+          <div class="control-mode-bar">
+            <button id="controlModeToggle" class="mode-toggle is-active" type="button"><i data-lucide="gamepad-2"></i><span><small>控制权</small><strong>MOVE 接管</strong></span></button>
+            <button id="mappingModeToggle" class="mode-toggle is-active" type="button"><i data-lucide="map-pinned"></i><span><small>网页速度模式</small><strong>建图 ON</strong></span></button>
+            <button id="echoModeToggle" class="mode-toggle" type="button"><i data-lucide="repeat-2"></i><span><small>串口回响</small><strong>回响 OFF</strong></span></button>
+          </div>
+
+          <div class="drive-layout">
+            <div class="dpad" aria-label="八向差速遥控">
+              <button class="motion-button forward-left" data-command="forward_left" type="button" disabled aria-label="左前"><i data-lucide="arrow-up-left"></i><span>左前</span></button>
+              <button class="motion-button forward" data-command="forward" type="button" disabled aria-label="前进"><i data-lucide="arrow-up"></i><span>前进</span></button>
+              <button class="motion-button forward-right" data-command="forward_right" type="button" disabled aria-label="右前"><i data-lucide="arrow-up-right"></i><span>右前</span></button>
+              <button class="motion-button left" data-command="turn_left" type="button" disabled aria-label="原地左旋"><i data-lucide="rotate-ccw"></i><span>左旋</span></button>
+              <button id="stopButton" class="motion-button stop" data-command="stop" type="button" disabled aria-label="零速 MOVE 停止"><i data-lucide="square"></i><span>停止</span></button>
+              <button class="motion-button right" data-command="turn_right" type="button" disabled aria-label="原地右旋"><i data-lucide="rotate-cw"></i><span>右旋</span></button>
+              <button class="motion-button backward-left" data-command="backward_left" type="button" disabled aria-label="左后"><i data-lucide="arrow-down-left"></i><span>左后</span></button>
+              <button class="motion-button backward" data-command="backward" type="button" disabled aria-label="后退"><i data-lucide="arrow-down"></i><span>后退</span></button>
+              <button class="motion-button backward-right" data-command="backward_right" type="button" disabled aria-label="右后"><i data-lucide="arrow-down-right"></i><span>右后</span></button>
+            </div>
+
+            <div class="drive-profile">
+              <div class="led-readout"><div id="ledLamp" class="led-lamp"></div><div><span>当前档位</span><strong id="gearText">建图 1挡</strong><small id="ledColorText">Cyan / 青色</small></div></div>
+              <dl class="gear-metrics"><div><dt>PROFILE</dt><dd id="driveProfileText">建图模式</dd></div><div><dt>LEVEL</dt><dd id="multiplierText">M1</dd></div><div><dt>SPEED</dt><dd id="speedText">0.20 m/s · 9°/s</dd></div></dl>
+              <button id="gearButton" class="button button-secondary gear-button" type="button"><i data-lucide="gauge"></i>切换档位</button>
+            </div>
+          </div>
+
+          <div class="safety-actions">
+            <button class="button button-secondary" type="button" data-serial-action="stop"><i data-lucide="circle-stop"></i>STOP 0x02</button>
+            <button id="estopButton" class="estop-button" type="button"><i data-lucide="octagon-x"></i><span><strong>紧急停止</strong><small>ESTOP / 软件锁定</small></span></button>
+            <button id="resetEstopButton" class="button button-secondary" type="button" disabled><i data-lucide="shield-check"></i>解除急停</button>
+            <button class="button button-danger-outline" type="button" data-serial-action="estop"><i data-lucide="triangle-alert"></i>ESTOP 0x03</button>
+          </div>
+
+          <div class="utility-actions">
+            <button id="slamLogToggle" class="button button-secondary" type="button"><i data-lucide="file-clock"></i>SLAM Log OFF</button>
+            <label class="slam-log-interval" for="slamLogInterval">
+              <span>记录间隔</span>
+              <span class="slam-log-interval-input"><input id="slamLogInterval" type="number" min="0.5" max="60" step="0.5" value="3" inputmode="decimal" aria-label="SLAM 日志记录间隔（秒）" /><b>秒</b></span>
+            </label>
+          </div>
+        </article>
+
+        <article class="panel status-panel" aria-labelledby="statusTitle">
+          <header class="panel-header">
+            <div class="panel-title"><span class="section-index">04</span><div><p class="section-kicker">TELEMETRY</p><h2 id="statusTitle">状态与数据帧</h2></div></div>
+            <span id="statusSource" class="panel-status">Local state</span>
+          </header>
+          <dl class="status-grid">
+            <div><dt>ROS Bridge</dt><dd id="statusRos" class="status-value offline">Disconnected</dd></div>
+            <div><dt>Video</dt><dd id="statusVideo" class="status-value offline">Disconnected</dd></div>
+            <div><dt>Gear</dt><dd id="statusGear">建图 1挡</dd></div>
+            <div><dt>LED</dt><dd id="statusLed">cyan</dd></div>
+            <div><dt>Speed</dt><dd id="statusSpeed">0.20 m/s</dd></div>
+            <div><dt>Last command</dt><dd id="statusCommand">Stop</dd></div>
+            <div><dt>Map</dt><dd id="statusMap" class="status-value waiting">Waiting</dd></div>
+            <div><dt>Pose</dt><dd id="statusPose" class="status-value waiting">Waiting</dd></div>
+            <div><dt>E-Stop</dt><dd id="statusEstop" class="status-value online">Inactive</dd></div>
+          </dl>
+          <div id="robotDetail" class="robot-detail"><div><span>Mode</span><strong id="robotMode">—</strong></div><div><span>State</span><strong id="robotState">—</strong></div><div><span>Battery</span><strong id="robotBattery">—</strong></div><p id="robotMessage">等待 /robot/status</p></div>
+
+          <div class="telemetry-tabs" role="tablist">
+            <button class="tab-button is-active" data-tab="tx" type="button">TX</button>
+            <button class="tab-button" data-tab="echo" type="button">Echo</button>
+            <button class="tab-button" data-tab="navi" type="button">NAVI</button>
+            <button class="tab-button" data-tab="events" type="button">Events</button>
+          </div>
+          <section class="telemetry-pane is-active" data-pane="tx"><div class="log-heading"><h3>发送数据帧</h3><span id="txFrameAge">Waiting</span></div><pre id="txFrameText">Waiting for /robot/serial_debug</pre></section>
+          <section class="telemetry-pane" data-pane="echo"><div class="log-heading"><h3>回响帧</h3><span id="echoFrameAge">Waiting</span></div><ol id="echoFrameList" class="frame-list"><li class="is-muted">Waiting for echo frames</li></ol></section>
+          <section class="telemetry-pane" data-pane="navi"><div class="log-heading"><h3>陀螺仪与速度</h3><span id="naviFrameAge">Waiting</span></div><pre id="naviFrameText">Waiting for 0x07 NAVI frames</pre></section>
+          <section class="telemetry-pane" data-pane="events"><div class="log-heading"><h3>最近事件</h3><span>Latest 5</span></div><ol id="eventList" class="event-list"><li><time>--:--:--</time><span>控制台已就绪</span></li></ol></section>
+        </article>
+      </main>
+
+      <footer class="app-footer"><span>AGV LAN CONSOLE · ROS2 JAZZY</span><span>软件急停不能替代物理急停回路</span></footer>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

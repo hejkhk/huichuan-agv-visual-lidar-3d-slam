@@ -1,0 +1,60 @@
+ekf_filter_node:
+  ros__parameters:
+    frequency: 30.0
+    sensor_timeout: 0.25
+    two_d_mode: true
+    transform_time_offset: 0.0
+    transform_timeout: 0.10
+    print_diagnostics: true
+    debug: false
+    publish_tf: true
+    publish_acceleration: false
+    reset_on_time_jump: true
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    # STM32 NAVI 轮速里程计：只融合前向速度 vx。角速度单独从 IMU 话题融合。
+    # 不融合它自己积分出的 x/y/yaw，避免重复使用同一传感器信息。
+    odom0: /wheel/odom
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  false, false,
+                   false, false, false,
+                   false, false, false]
+    odom0_queue_size: 20
+    odom0_nodelay: true
+    odom0_differential: false
+    odom0_relative: false
+
+    # STM32 上报的 z 轴角速度。第一版只融合 wz，不使用绝对 yaw/磁力计。
+    imu0: /imu_cartographer
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_queue_size: 50
+    imu0_nodelay: true
+    imu0_differential: false
+    imu0_relative: false
+    imu0_remove_gravitational_acceleration: false
+
+    # 平面差速车过程噪声：先用保守值，实车稳定后再调。
+    process_noise_covariance: [0.05, 0.0,  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0,  0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0,  0.0,  0.06,0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0,  0.0,  0.0, 0.03,0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0,  0.0,  0.0, 0.0, 0.03,0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0,  0.0,  0.0, 0.0, 0.0, 0.06,0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0,  0.0,  0.0, 0.0, 0.0, 0.0, 0.025,0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0,  0.0,  0.0, 0.0, 0.0, 0.0, 0.0, 0.025,0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0,  0.0,  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.04,0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0,  0.0,  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02,0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0,  0.0,  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02,0.0, 0.0, 0.0, 0.0,
+                               0.0,  0.0,  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.04,0.0, 0.0, 0.0,
+                               0.0,  0.0,  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01,0.0, 0.0,
+                               0.0,  0.0,  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01,0.0,
+                               0.0,  0.0,  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.015]

@@ -1,0 +1,21 @@
+{
+  "name": "robot-web-console",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "dev:mock": "node scripts/dev-with-mock.mjs",
+    "mock-stream": "node scripts/mock-stream-server.mjs",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "lucide": "^1.24.0",
+    "roslib": "^1.4.1"
+  },
+  "devDependencies": {
+    "@ffmpeg-installer/ffmpeg": "1.1.0",
+    "vite": "^6.4.3"
+  }
+}
