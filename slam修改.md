@@ -4135,4 +4135,6 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
 - 将定制行为树头文件统一切换为 Humble 的 `behaviortree_cpp_v3`，移除仅 BT.CPP 4
   存在的 JSON 注册接口；7 个节点已在 Ubuntu 22.04 CI 中完成编译。
 - 增加 `dwb_plugins` 运行时依赖及一键启动前检查。`dwb_core` 只提供控制器接口，
-  `dwb_plugins` 才包含 DWB 实际使用的 `StandardTrajectoryGenerator` 和轨迹评价插件。
+  `dwb_plugins` 才包含 DWB 实际使用的 `StandardTrajectoryGenerator`。
+- 增加 `dwb_critics` 运行时依赖；它提供 `RotateToGoalCritic`、`PathDistCritic` 等
+  DWB 轨迹评分器，缺失时 controller server 会在 lifecycle configure 阶段拒绝启动。
