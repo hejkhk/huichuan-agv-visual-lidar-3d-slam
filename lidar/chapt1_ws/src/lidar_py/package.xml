@@ -39,7 +39,7 @@
   <exec_depend>spatio_temporal_voxel_layer</exec_depend>
   <depend>frontier_exploration_ros2</depend>
   <depend>nav2_waypoint_follower</depend>
-  <depend>short_goal_bt</depend>
+  <exec_depend>short_goal_bt</exec_depend>
   <exec_depend>nav2_rviz_plugins</exec_depend>
   <depend>rviz2</depend>
   <depend>tf2_ros</depend>
