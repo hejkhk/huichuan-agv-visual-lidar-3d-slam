@@ -4087,3 +4087,10 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
 - 指纹变化时仅清理各自 `~/.cache/huichuan_*_humble_ws` 下的 `build/install/log`，不会删除项目、RTAB-Map 数据库、地图或标定文件。
 - `validate_auto_mapping_humble.sh` 新增 colcon 包发现检查，保证旧行为树插件不会混入 Humble 全工作区；Nav2 生命周期测试显式加载项目实际使用的两个 Humble XML 行为树路径。
 - GitHub Actions 继续在 Ubuntu 22.04 + ROS 2 Humble 上构建和验证。此改动不修改 Cartographer 稳定建图参数、STM32、车体尺寸、导航速度、代价地图或避障参数。
+# 2026-08-04 V6.49: 修复全局规划起点被判为致命障碍
+
+- 分析 `dual_3d_2026-08-04_09-52-43/runtime.log`，确认 RViz 目标、BT Navigator 和 Planner 均正常；全部目标失败于 SmacPlanner2D 的 `Starting point in lethal space`。
+- 根因是局部 Cartographer 静态层启用了车体 footprint 清理，而全局静态层错误地关闭了该功能。车底或紧贴车体边缘的单个历史占用像素会把全局规划起点永久判死，因此没有蓝色路径，也不会产生速度命令。
+- 全局 `static_layer.footprint_clearing_enabled` 恢复为 `true`。只清除真实 `0.665 x 0.665 m` 车体当前占据的区域，不清除 footprint 外的墙体、2D 雷达障碍或 RGB-D 障碍。
+- 一键启动源文件契约和 GitHub Humble 预检现同时要求局部、全局静态层都启用起点 footprint 清理，避免后续 YAML 覆盖再次引入该故障。
+- 日志后半段 `/dev/ttyACM0`、2D 扫描和 Gemini2 点云同时断流属于独立的 USB/设备掉线；现有安全看门狗正确保持零速，本次不通过放宽安全条件掩盖掉线。

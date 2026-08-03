@@ -457,6 +457,10 @@ for label in ("local_costmap", "global_costmap"):
         if "static_layer" not in cost_params.get("plugins", []):
             raise SystemExit(
                 f"{label} does not include the persistent Cartographer static layer")
+        static_layer = cost_params.get("static_layer", {})
+        if static_layer.get("footprint_clearing_enabled") is not True:
+            raise SystemExit(
+                f"{label} must clear stale static cells below the robot footprint")
         if label == "global_costmap" and (
                 "visual_wall_global_stvl_layer" in cost_params.get("plugins", [])):
             raise SystemExit(
@@ -631,7 +635,7 @@ fi
 if is_true "$ENABLE_NAVIGATION"; then
   verify_navigation_source_contract || \
     die "Navigation YAML contract is invalid; Nav2 was not launched"
-  log "[ready] Navigation source contract: static walls=65, unknown space=blocked, global RTAB wall duplication=off, inflation=0.49m/14.0"
+  log "[ready] Navigation source contract: static walls=65, robot start footprint=clear, unknown space=blocked, global RTAB wall duplication=off, inflation=0.49m/14.0"
 fi
 
 # RViz is intentionally owned by this outer runner and opened before colcon or

@@ -178,6 +178,9 @@ for costmap_name in ("local_costmap", "global_costmap"):
         raise SystemExit(f"{costmap_name} lost Cartographer static walls")
     if params["static_layer"].get("plugin") != "nav2_costmap_2d::StaticLayer":
         raise SystemExit(f"invalid Humble StaticLayer override: {costmap_name}")
+    if params["static_layer"].get("footprint_clearing_enabled") is not True:
+        raise SystemExit(
+            f"{costmap_name} must clear stale static cells below the robot footprint")
     inflation = rpp[costmap_name][costmap_name]["ros__parameters"]["inflation_layer"]
     if inflation.get("inflation_radius") != 0.49:
         raise SystemExit(f"{costmap_name} inflation radius changed")

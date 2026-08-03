@@ -159,7 +159,12 @@ global_costmap:
         map_subscribe_transient_local: true
         subscribe_to_updates: true
         transform_tolerance: 0.30
-        footprint_clearing_enabled: false
+        # The robot physically occupies its current footprint. Clear stale
+        # Cartographer cells below it before Smac checks the start cell, or a
+        # single floor/wall-edge pixel can make every goal fail with
+        # "Starting point in lethal space". Cells outside the real footprint
+        # remain untouched and continue to constrain the global route.
+        footprint_clearing_enabled: true
       depth_global_stvl_layer:
         plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
         enabled: true
