@@ -4,7 +4,7 @@
 `lidar/chapt1_ws/src/lidar_py` 中的实际代码为准。项目根目录和运行链路目录均使用 ASCII
 名称，避免 colcon、rosidl、CMake、Node.js 和 Shell 在中文路径下出现兼容问题。
 
-当前系统运行环境为 Ubuntu 24.04 + ROS2 Jazzy，目标计算平台为树莓派 5。系统把
+当前系统运行环境为 Ubuntu 22.04 + ROS2 Humble，目标计算平台为带 RTX 3060 的 x86 电脑。系统把
 LD14P 二维激光雷达、Gemini2 深度相机、STM32/CANopen 汇川伺服底盘、Cartographer、
 Nav2、视觉近地面避障、自动 Frontier 探索、网页控制台和 SLAM 日志整合为一套链路。
 
@@ -12,8 +12,8 @@ Nav2、视觉近地面避障、自动 Frontier 探索、网页控制台和 SLAM 
 
 - 使用 LD14P 二维激光雷达和 Cartographer 进行在线二维建图。
 - 使用 STM32 上行的 `yaw + vx + wz + MCU tick` 生成 `/odom` 和平面 IMU。
-- 使用 Jazzy 原生 Nav2 和 `frontier_exploration_ros2` 完成网页选点导航与自动 Frontier 探索。
-- 使用 State Lattice 全局规划、Rotation Shim、DWB 和定制行为树改善四轮差速车导航。
+- 使用 Humble 原生 Nav2 和 `frontier_exploration_ros2` 完成网页选点导航与自动 Frontier 探索。
+- 使用 SmacPlanner2D 全局规划、Regulated Pure Pursuit 连续跟踪和受控恢复完成四轮差速导航。
 - 使用 Gemini2 SDK 读取 RGB 与深度图，检测二维雷达扫描不到的低矮障碍。
 - 在 Nav2 或网页遥控速度上叠加视觉避障，统一输出 `/cmd_vel_safe`。
 - 将 `/cmd_vel_safe` 换算为左右轮速度，再组装成四轮 `AA 55` 速度帧发送给 STM32。
@@ -35,12 +35,12 @@ Nav2、视觉近地面避障、自动 Frontier 探索、网页控制台和 SLAM 
 | `STM32 + JY901B + 编码器 + CANopen 汇川伺服` | 下位机 | 读取编码器和陀螺仪、控制四台伺服、接收上位机速度和控制命令。 | AA55 控制帧、PS2 手柄、编码器、JY901B | 0x07 NAVI、回响帧、CANopen 电机控制 |
 | `lidar_node` | ROS 驱动 | 拆解 LD14P 帧、校验 CRC、映射设备时间戳、生成 LaserScan，并发布雷达静态 TF。 | 雷达串口字节流 | `/scan`、`/scan_timed`、`/scan_timed_v2`、`base_link -> laser_frame` |
 | `laser_filters` | ROS 预处理 | 过滤过近、过远和孤立散斑点，减少建图噪声。 | `/scan_timed_v2` | `/scan_timed_v2_filtered` |
-| `chassis_node` | ROS 底盘桥 | 解析 STM32 NAVI/回响，生成 odom 和 IMU；把安全 Twist 换算为四轮 AA55 帧；保存网页共享控制状态。 | STM32 串口、`/cmd_vel_safe`、网页控制 | `/odom`、`/imu_cartographer`、TF、AA55、控制/串口调试状态 |
+| `chassis_node` | ROS 底盘桥 | 解析 STM32 NAVI/回响，生成 odom 和 IMU；把安全 Twist 换算为四轮 AA55 帧；导航未就绪时只禁止上位机 Twist、保持 PS2 控制，并在 0x07 运动反馈冻结时锁存停车。 | STM32 串口、`/cmd_vel_safe`、Cartographer 位姿、系统就绪状态、网页控制 | `/odom`、`/imu_cartographer`、TF、AA55、控制/串口调试状态 |
 | `Cartographer V13` | SLAM | 融合过滤后的激光、里程计和 IMU，执行扫描匹配、子图构建和回环优化。 | 激光、`/odom`、`/imu_cartographer` | 轨迹、子图、`map -> odom` |
 | `/map + map->odom` | 地图/TF 结果 | 表示 Cartographer 当前构建的占据栅格地图和全局定位修正。 | Cartographer 轨迹与子图 | `/map`、`map -> odom`，供 Nav2、网页、RViz、Frontier 和日志使用 |
 | `robot_pose_publisher` | ROS 显示桥 | 从 TF 查询 `map -> base_link`，生成网页和 Frontier 易用的机器人位姿；网页 yaw 仅做轻度显示平滑。 | TF | `/robot_pose` |
-| `Nav2 State Lattice + Rotation Shim + DWB + BT` | 导航 | 计算全局路线、局部速度和恢复动作，不直接操作串口。 | `/map`、TF、`/scan`、`/depth_obstacle_scan`、目标点 | `/plan`、`/cmd_vel_nav`、导航 Action 状态 |
-| `frontier_explorer` | 自动建图 | 使用 `auto_mapping_v1` 的 Jazzy 原生 C++ 算法选择可达 Frontier，并向 Nav2 连续提交探索目标。 | `/map`、TF、全局/局部 costmap、控制服务 | `NavigateToPose` 目标、Frontier 标记和完成事件 |
+| `Nav2 SmacPlanner2D + RPP + BT` | 导航 | 融合 2D/3D 代价地图，计算全局路线、连续路径跟踪和恢复动作，不直接操作串口。 | `/map`、TF、过滤雷达、3/5 cm 有限时长 STVL、过滤视觉墙、目标点 | `/plan`、`/lookahead_arc`、`/cmd_vel_nav`、导航 Action 状态 |
+| `frontier_explorer` | 自动建图 | 使用 `auto_mapping_v1` 的 Humble 原生 C++ 算法选择可达 Frontier，并向 Nav2 连续提交探索目标。 | `/map`、TF、全局/局部 costmap、控制服务 | `NavigateToPose` 目标、Frontier 标记和完成事件 |
 | `frontier_web_bridge` | 网页探索桥 | 保持既有网页开关/状态接口，并将请求转换为原生 Frontier 控制服务；人工目标优先时负责停用探索。 | `/robot/web_control`、`/control_exploration`、Nav2 Action 状态 | `/auto_mapping/status`、`/auto_mapping/set_enabled` |
 | `depth_obstacle_node` | 视觉避障 | SDK 读取 Gemini2，采集地面 Baseline，计算九区障碍、距离、面积和左右风险。 | RGB/Depth、网页 Baseline/调试命令 | `/depth_obstacle`、`/depth/baseline_ready`、MJPEG |
 | `safety_fusion_node` | 速度/障碍仲裁层 | 在网页遥控和 Nav2 之间选取唯一速度源，应用安全锁和带状态的视觉修正，并把低障碍转换为 Nav2 可识别的虚拟扫描。 | `/cmd_vel_web`、`/cmd_vel_nav`、深度障碍、急停状态 | `/cmd_vel_safe`、`/depth_obstacle_scan` |
@@ -59,7 +59,7 @@ Nav2、视觉近地面避障、自动 Frontier 探索、网页控制台和 SLAM 
 | `/xxx` | ROS2 topic 名称；箭头方向为发布者到订阅者。 |
 | `NavigateToPose`、`ComputePathToPose` | Nav2 Action，分别表示执行导航和只计算预览路径。 |
 | `map -> odom -> base_link -> laser_frame` | TF 坐标关系，不是普通 topic。 |
-| `AA55 20B` | 树莓派发给 STM32 的固定 20 字节二进制控制协议。 |
+| `AA55 20B` | 上位机发给 STM32 的固定 20 字节二进制控制协议。 |
 | `0x07 NAVI 20B` | STM32 以 50 Hz 上发的 yaw、vx、wz 和 MCU 时间戳。 |
 | `MJPEG :8080` | 独立 HTTP 视频流，不经过 ROSBridge。 |
 | `BRIDGE <--> UI` | 网页和 ROS 的逻辑双向通信；图中网页直连 ROS 节点的箭头实际由 ROSBridge 承载。 |
@@ -74,14 +74,14 @@ flowchart LR
         STM32["STM32 + JY901B + 编码器 + CANopen 汇川伺服"]
     end
 
-    subgraph ROS["树莓派 5 / ROS2 Jazzy"]
+    subgraph ROS["RTX 3060 x86 上位机 / ROS2 Humble"]
         LNODE["lidar_node"]
         FILTER["laser_filters"]
         CHASSIS["chassis_node"]
         CARTO["Cartographer V13"]
         MAP["/map + map->odom"]
         POSE["robot_pose_publisher"]
-        NAV2["Nav2 State Lattice + Rotation Shim + DWB + BT"]
+        NAV2["Nav2 SmacPlanner2D + RPP + BT"]
         FRONTIER["frontier_explorer + frontier_web_bridge"]
         VISION["depth_obstacle_node"]
         FUSION["safety_fusion_node"]
@@ -194,16 +194,45 @@ STM32 默认以 50 Hz 上发 `0x07 NAVI`：
 
 ### 3.3 Nav2 导航链
 
-当前只有一个正式导航配置 `NAV_PROFILE=jazzy_native`：
+当前正式导航配置是 Humble 原生 `SmacPlanner2D + Regulated Pure Pursuit`：
 
-- 全局规划：Jazzy 原生 `SmacPlannerLattice`，使用 `auto_mapping_v1` 的差速运动原语。
-- 初始转向：Jazzy 原生 `RotationShimController`。
-- 局部控制：DWB，带前向优先、路径距离和障碍物评价。
-- 路径平滑：State Lattice 内置平滑，并启动 Jazzy 原生 `ConstrainedSmoother` 服务。
-- 行为树：直接使用 `auto_mapping_v1` 的 BT.CPP v4 短目标预转、旋转安全检查、倒车脱困、低频重规划和受控恢复逻辑。
-- 速度使用建图二档物理包络：直行上限 `0.20 m/s`、移动圆弧外轮不超过 `0.16 m/s`、
-  原地转向上限 `0.209 rad/s`（12 度/秒）。
-- 输出：Nav2 只发布 `/cmd_vel_nav`，不直接写串口。
+- 全局规划：`SmacPlanner2D` 在 Cartographer、2D 雷达、分级深度 STVL 和视觉墙融合后的
+  5 cm 全局代价地图上生成高代价感知的中心路径。2D 内部后处理平滑已旁路，避免窄门
+  和墙角处把碰撞安全的栅格折线切成捷径。
+- 局部控制：RPP 以 20 Hz 连续跟踪路径，并沿短期弧线模拟完整车体 footprint 的碰撞。
+- 决策树：每 0.5 秒检查路径；失效立即重算，有效路径最多保持 4 秒，避免等价路线横跳。
+  临时障碍令路径不可用时先停车并持续重规划最多约 10 秒，覆盖全局 RGB-D 记忆的 8 秒
+  衰减时间；进度检查器给该安全停车保留 12 秒，只有持续阻塞才允许进入受控倒车和
+  小角度旋转脱困。
+- 脱困：局部失败先受控后退 `0.22 m @ 0.06 m/s`；外层恢复可继续后退 `0.30 m`，
+  再尝试左右 `0.35 rad` 小角度旋转并重新规划。
+- 速度使用导航二档物理包络：直行 `0.20 m/s`，0.85 m 半径弯道约
+  `0.12 m/s + 0.14 rad/s`，原地校正 `0.157 rad/s`。
+- 普通弯道连续跟踪；路径起始方向相差超过约 77°时才原地校正。
+- 输出：controller 先发布 `/cmd_vel_nav_raw`，30 Hz 速度平滑后输出 `/cmd_vel_nav`，
+  再经安全融合和 C++ 碰撞门，Nav2 不直接写串口。
+
+Gemini2 的低矮障碍记忆由 Nav2 STVL 直接维护，而不是依赖 RViz 是否勾选 OctoMap：
+
+- `/local_highres_cloud_v21` 保持单帧实时输出并直接进入 C++ 碰撞门；真实近障碍无需等待即可停车。
+- 连续 3 个有效深度帧都出现后，点还必须通过地面几何检查。高于拟合地面至少 5 cm，
+  或附近存在至少 3 cm 竖直边缘的点，才发布到 `/local_highres_cloud_v21/sensor`。
+  该近期层在局部/全局分别保留 4/8 秒，足以覆盖短暂转头，又不会把稳定地砖波纹永久累计。
+- 更严格的 `/local_highres_cloud_v21/persistent_sensor` 只保留高于地面至少 8 cm，
+  或附近具有至少 6 cm 竖直结构的点；当前仅作为调试候选流，不直接写入 Nav2，
+  避免地面系统误差形成永久占用。
+- 2–5 cm 的可疑低点即使未进入规划记忆层，仍保留在单帧 C++ 碰撞门中；车辆靠近时会立即停车。
+- 相机再次看到该空间为空后，清除视锥连续确认约 `0.6 s` 才删除旧体素。
+- 标记与清除使用独立点云 topic；深度有效覆盖低于 5% 的黑帧、反光帧仍可标记检测到的
+  障碍，但没有资格清除历史体素。
+- 清除近裁剪面为 `0.20 m`，相机看不见的近距离盲区不会被误判为空地。
+- Cartographer 2D 静态墙、360° 雷达、RTAB-Map 长期视觉墙和 C++ 最终碰撞门仍同时生效。
+- RViz 可手动勾选 `Nav2 Bounded Obstacle Memory (3 cm / 4s)` 查看当前真正参与局部规划的体素；
+  `3-Frame Recent Geometry Marks (4s Local)` 和 `Strict Geometry Candidates (Debug Only)`
+  分别用于检查近期标记流和不进入 Nav2 的严格几何候选流。
+  `OctoMap 3D Occupied` 是 RTAB-Map 的长期 3D 建图显示，不是最终实时停车输入。
+- RViz 右侧 `Navigation 2` 面板显示当前目标状态。导航执行中点击 `Cancel` 会立即取消目标并由
+  安全链发送零速，可作为中途停止按钮；再次导航时重新使用 `Nav2 Goal` 工具标点。
 
 网页在地图上单击时先发布 `/web/preview_goal`，`web_path_preview_node.py` 调用
 `ComputePathToPose` 并发布 `/web/preview_path`。点击“开始导航”后才发布
@@ -215,7 +244,7 @@ STM32 默认以 50 Hz 上发 `0x07 NAVI`：
 
 ### 3.4 自动建图链
 
-网页“自动建图”开关经 `frontier_web_bridge.py` 控制 Jazzy 原生 `frontier_explorer`：
+网页“自动建图”开关经 `frontier_web_bridge.py` 控制 Humble 原生 `frontier_explorer`：
 
 1. 原生 C++ 节点从 `/map` 提取已知自由区域与未知区域交界的 Frontier。
 2. 结合真实车体尺寸、目标净空、全局/局部代价地图、访问记录和抑制区域筛选目标。
@@ -284,7 +313,7 @@ STM32 默认以 50 Hz 上发 `0x07 NAVI`：
 ├── open_all.sh
 ├── open_all_log.sh
 ├── slam_logger.py
-├── validate_auto_mapping_jazzy.sh
+├── validate_auto_mapping_humble.sh
 ├── ReadMe.md
 ├── CAR_使用教程_注意事项.md
 ├── 修改.md
@@ -312,7 +341,7 @@ STM32 默认以 50 Hz 上发 `0x07 NAVI`：
 | `open_all.sh` | 主一键启动。启动完整系统，周期日志由网页控制，退出时不保存最终地图和 PBStream。 |
 | `open_all_log.sh` | 完整保存版。复用 `open_all.sh`，退出前保存 `final_map.pgm/.yaml` 和 `result.pbstream`。 |
 | `slam_logger.py` | 网页可控的周期地图、位姿和 NAVI 原始/解析日志记录器。默认关闭，默认间隔 3 秒。 |
-| `validate_auto_mapping_jazzy.sh` | 不打开硬件、不发电机指令的 Jazzy 静态、依赖、配置、编译和 Nav2 lifecycle 冒烟验证脚本。 |
+| `validate_auto_mapping_humble.sh` | 不打开硬件、不发电机指令的 Humble 静态、依赖、配置、编译和 Nav2 lifecycle 冒烟验证脚本。 |
 | `maps/` | 已保存的历史地图文件。当前在线建图启动链不会自动加载这里的地图。 |
 | `SLAM_Log/` | 每次一键启动生成的会话目录、周期日志和 Log 版最终文件。 |
 | `车尺寸.txt` | 实车测量尺寸。 |
@@ -336,7 +365,7 @@ STM32 默认以 50 Hz 上发 `0x07 NAVI`：
 | `robot_pose_publisher.py` | 从 TF 生成网页使用的 `/robot_pose`，只对网页朝向做平滑。 |
 | `web_goal_nav_node.py` | 将网页确认目标转为 Nav2 `NavigateToPose`，并协调自动探索。 |
 | `web_path_preview_node.py` | 对未确认的网页标点周期调用 `ComputePathToPose`，生成预览路线。 |
-| `frontier_web_bridge.py` | 在现有网页协议与 Jazzy 原生 Frontier 控制服务之间同步开关、完成状态和 Action 取消状态。 |
+| `frontier_web_bridge.py` | 在现有网页协议与 Humble 原生 Frontier 控制服务之间同步开关、完成状态和 Action 取消状态。 |
 | `auto_map_saver.py` | Frontier 完成后自动保存的可选节点；一键脚本当前明确禁用它。 |
 
 #### Launch 与配置
@@ -344,31 +373,37 @@ STM32 默认以 50 Hz 上发 `0x07 NAVI`：
 | 文件 | 作用 |
 |---|---|
 | `launch/cartographer_scan_v2_launch.py` | 雷达、底盘、滤波、Cartographer、OccupancyGrid、网页位姿和可选 RViz。 |
-| `launch/cartographer_auto_mapping_jazzy_launch.py` | 在冻结的稳定建图链外围加入 Jazzy 原生 Nav2、融合避障、网页目标、预览和 Frontier。 |
+| `launch/cartographer_auto_mapping_humble_launch.py` | 在冻结的稳定建图链外围加入 Humble 原生 Nav2、融合避障、网页目标、预览和 Frontier。 |
+| `launch/dual_resolution_3d_slam.launch.py` | 双分辨率 2D/3D 主链；组合 Gemini2、RTAB-Map、实时 C++ 点云、视觉墙体过滤和可选 Nav2。 |
 | `config/cartographer_2d_v9_tightened.lua` | 当前实车定版 Cartographer V13 参数。 |
+| `config/cartographer_2d_v9_nav_guarded.lua` | 导航专用 V9，仅提高走廊歧义闭环门槛；纯建图不使用。 |
 | `config/laser_filter.yaml` | 0.10–8.0 m 距离滤波和散斑滤波。 |
-| `config/nav2_auto_mapping_jazzy.yaml` | 原生 State Lattice + Rotation Shim + DWB + Constrained Smoother 参数。 |
-| `config/frontier_auto_mapping_jazzy.yaml` | `auto_mapping_v1` 原生 Frontier 自动探索参数。 |
-| `config/lattice_forward_turnaround_5cm.json` | 5 cm 分辨率的差速车 State Lattice 运动原语。 |
-| `behavior_trees/navigate_to_pose_jazzy.xml` | 从 `auto_mapping_v1` 接入的 BT.CPP v4 单目标导航行为树。 |
-| `behavior_trees/navigate_through_poses_jazzy.xml` | Jazzy 多目标导航行为树。 |
+| `config/nav2_auto_mapping_humble.yaml` | Nav2 公共节点、车体 footprint、基础代价地图和生命周期参数。 |
+| `config/nav2_dual_3d_rpp_override.yaml` | 当前正式导航使用的 SmacPlanner2D、RPP、二档速度、目标容差和速度平滑参数。 |
+| `config/nav2_dual_3d_mppi_override.yaml` | 历史 MPPI 参数，仅保留对照和人工回退，正式一键启动不加载。 |
+| `config/nav2_dual_3d_stvl_override.yaml` | 3 cm 局部、5 cm 全局的近期/几何验证持久 RGB-D 障碍记忆，以及过滤后 RTAB-Map 长期墙体的 Nav2 STVL 配置。 |
+| `config/frontier_auto_mapping_humble.yaml` | `auto_mapping_v1` 原生 Frontier 自动探索参数。 |
+| `config/lattice_forward_turnaround_5cm.json` | 历史 State Lattice 对照数据，当前正式导航不读取。 |
+| `config/lattice_diff_slip_compensated_45cm_5cm.json` | 历史滑移补偿 Lattice 对照数据，当前正式导航不读取。 |
+| `behavior_trees/navigate_to_pose_humble.xml` | 1 Hz 验路、有效路径最多保留 3 秒，并提供受控倒车/旋转脱困的 BT.CPP 3 单目标树。 |
+| `behavior_trees/navigate_through_poses_humble.xml` | 相同验路、刷新和受控恢复策略的 BT.CPP 3 多目标树。 |
 | `rviz/nav2_display.rviz` | RViz 显示配置。 |
 
 #### 测试
 
 - `test_fixed_scan_grid.py`：固定角网格和整圈边界测试。
 - `test_lidar_timing.py`：雷达时钟回绕和时间映射测试。
-- Frontier C++ 单元测试位于 `frontier_exploration_ros2/test/`，在 Jazzy colcon 构建环境中执行。
+- Frontier C++ 单元测试位于 `frontier_exploration_ros2/test/`，在 Humble colcon 构建环境中执行。
 
-### 4.3 Jazzy 原生导航与自动探索包
+### 4.3 Humble 原生导航与自动探索包
 
 | 目录 | 作用 |
 |---|---|
-| `frontier_exploration_ros2/` | 直接接入 `auto_mapping_v1` 的 Jazzy C++ Frontier 搜索、目标调度、失败抑制和探索完成逻辑。 |
-| `short_goal_bt/` | `auto_mapping_v1` 的 BT.CPP v4 短目标、旋转安全和倒车脱困插件。 |
-| `/opt/ros/jazzy` Nav2 | 系统安装的 State Lattice、Rotation Shim、DWB、Constrained Smoother 和 Behavior Server。 |
+| `frontier_exploration_ros2/` | 直接接入 `auto_mapping_v1` 的 Humble C++ Frontier 搜索、目标调度、失败抑制和探索完成逻辑。 |
+| `short_goal_bt/` | 历史定制 BT 插件源码；当前正式行为树不加载、不编译。 |
+| `/opt/ros/humble` Nav2 | 系统安装的 SmacPlanner2D、Regulated Pure Pursuit、Behavior Server 和 BT Navigator。 |
 
-旧 `*_foxy` 回移植包和 Hybrid 回退配置已经删除，避免覆盖 Jazzy 系统插件或被 colcon 误编译。
+旧 `*_foxy` 回移植包和 Hybrid 回退配置已经删除，避免覆盖 Humble 系统插件或被 colcon 误编译。
 
 ### 4.4 视觉工程
 
@@ -436,7 +471,7 @@ LIDAR_PORT=/dev/ttyUSB1 CHASSIS_PORT=/dev/ttyUSB0 ./open_all.sh
 
 ### 5.1 STM32 下行 AA55 控制帧
 
-方向：树莓派/上位机 -> STM32  
+方向：上位机 -> STM32
 长度：固定 20 字节  
 字节序：四个速度均为小端 `int32`
 
@@ -522,7 +557,7 @@ AA55 speeds = [-right_cnt, left_cnt, -right_cnt, left_cnt]
 
 ### 5.3 STM32 上行 NAVI 帧
 
-方向：STM32 -> 树莓派/上位机  
+方向：STM32 -> 上位机
 长度：固定 20 字节  
 帧头：`AA 55`  
 命令：`0x07`
@@ -755,11 +790,11 @@ enable_move, zero_move, stop, estop, ps2, echo_on, echo_off
 
 | 服务 | 默认地址 | 说明 |
 |---|---|---|
-| 网页 | `http://树莓派IP:5173` | Vite 控制台。 |
-| ROSBridge | `ws://树莓派IP:9090` | 网页与 ROS2 的 WebSocket 通道。 |
-| RGB MJPEG | `http://树莓派IP:8080/video_feed` | 带视觉避障标记的 RGB 流。 |
+| 网页 | `http://上位机IP:5173` | Vite 控制台。 |
+| ROSBridge | `ws://上位机IP:9090` | 网页与 ROS2 的 WebSocket 通道。 |
+| RGB MJPEG | `http://上位机IP:8080/video_feed` | 带视觉避障标记的 RGB 流。 |
 
-一键启动完成后终端会打印本机和局域网 URL。局域网设备必须与树莓派在同一网络，且防火墙
+一键启动完成后终端会打印本机和局域网 URL。局域网设备必须与上位机在同一网络，且防火墙
 允许 TCP 5173、9090 和 8080。
 
 网页会根据填写的机器人 IP 自动生成视频和 ROSBridge 地址，也可以手动填写。
@@ -768,7 +803,7 @@ enable_move, zero_move, stop, estop, ps2, echo_on, echo_off
 
 ### 8.1 首次准备
 
-系统要求 Ubuntu 24.04 + ROS 2 Jazzy。首次安装运行依赖：
+系统要求 Ubuntu 22.04 + ROS 2 Humble。首次安装运行依赖：
 
 ```bash
 sudo apt update
@@ -776,14 +811,14 @@ sudo apt install -y \
   python3-colcon-common-extensions python3-serial python3-numpy \
   python3-empy python3-lark python3-yaml \
   nodejs npm procps psmisc \
-  ros-jazzy-navigation2 ros-jazzy-nav2-bringup \
-  ros-jazzy-cartographer-ros ros-jazzy-laser-filters \
-  ros-jazzy-rosbridge-server ros-jazzy-rmw-cyclonedds-cpp
+  ros-humble-navigation2 ros-humble-nav2-bringup \
+  ros-humble-cartographer-ros ros-humble-laser-filters \
+  ros-humble-rosbridge-server ros-humble-rmw-cyclonedds-cpp
 ```
 
 ```bash
 cd <项目根目录>
-chmod +x open_all.sh open_all_log.sh validate_auto_mapping_jazzy.sh
+chmod +x open_all.sh open_all_log.sh validate_auto_mapping_humble.sh
 ```
 
 网页依赖若未安装：
@@ -794,11 +829,11 @@ npm install
 cd ..
 ```
 
-首次部署到树莓派、重新安装系统、更新 ROS/依赖、修改 Jazzy C++ 包或修改 launch
+首次部署到新的上位机、重新安装系统、更新 ROS/依赖、修改 Humble C++ 包或修改 launch
 之后，建议先做一次不接管硬件的编译验证：
 
 ```bash
-./validate_auto_mapping_jazzy.sh --build
+./validate_auto_mapping_humble.sh --build
 ```
 
 这个脚本是“部署前体检”，不是正式启动脚本，也不是每次开车前都必须执行。它不会打开
@@ -807,53 +842,53 @@ cd ..
 | 阶段 | 检查内容 | 目的 |
 |---:|---|---|
 | 1 | 对 `open_all.sh`、`open_all_log.sh` 和验证脚本执行 Bash 语法检查。 | 提前发现括号、引号和条件语句错误。 |
-| 2 | 检查 ROS2 Jazzy、Nav2、Cartographer、laser_filters、ROSBridge 等运行包，并核对 Cartographer 节点入口名。 | 避免启动到一半才发现 ROS 包或可执行文件缺失。 |
-| 3 | 解析 Jazzy YAML、State Lattice JSON、BT.CPP v4 XML 和 Python 文件。 | 提前发现配置版本或语法错误。 |
+| 2 | 检查 ROS2 Humble、Nav2、Cartographer、laser_filters、ROSBridge 等运行包，并核对 Cartographer 节点入口名。 | 避免启动到一半才发现 ROS 包或可执行文件缺失。 |
+| 3 | 解析 RPP/Smac/STVL YAML、BT.CPP 3 XML 和 Python 文件。 | 提前发现配置版本、插件名或语法错误。 |
 | 4 | 校验三个冻结建图文件的 SHA-256。 | 防止迁移导航时误改已经定版的 Cartographer 链。 |
-| 5 | 使用 `--build` 时，在纯 ASCII 缓存工作空间编译 `frontier_exploration_ros2`、`short_goal_bt` 和 `lidar_py`。 | 避免中文物理路径触发 Jazzy rosidl/CMake 问题。 |
-| 6 | 依次启动并 `configure` controller、smoother、planner、behavior、BT navigator 和 waypoint follower，随后立即清理。 | 真正加载 DWB/Rotation Shim/State Lattice/Constrained Smoother/BT 插件，避免“编译全绿、运行即死”的假通过。 |
+| 5 | 使用 `--build` 时，在纯 ASCII 缓存工作空间编译 `local_depth_cloud_cpp`、`frontier_exploration_ros2` 和 `lidar_py`。 | 避免中文物理路径触发 Humble rosidl/CMake 问题。 |
+| 6 | 依次启动并 `configure` controller、velocity smoother、planner、behavior、BT navigator 和 waypoint follower，随后立即清理。 | 真正加载 RPP、SmacPlanner2D、STVL 和行为树，避免“编译全绿、运行即死”的假通过。 |
 
 第 6 阶段只执行 lifecycle `configure`，不会 `activate` controller，不发布 Twist，不打开雷达、
 STM32 或相机，也不要求已有地图。每个节点必须出现一行
-`[ OK ] Jazzy lifecycle configure: /节点名`；任一插件、参数或行为树加载失败时，脚本会打印该节点的
+`[ OK ] Humble lifecycle configure: /节点名`；任一插件、参数或行为树加载失败时，脚本会打印该节点的
 错误摘要和日志末尾并返回非零状态。
 
-根目录 `.github/workflows/jazzy-preflight.yml` 会在推送到 `main` 或提交 Pull Request 时，在
-Ubuntu 24.04 + ROS 2 Jazzy 中自动重复依赖安装、编译、六节点 configure 冒烟测试和网页生产构建。
+根目录 `.github/workflows/humble-preflight.yml` 会在推送到 `main` 或提交 Pull Request 时，在
+Ubuntu 22.04 + ROS 2 Humble 中自动重复依赖安装、编译、六节点 configure 冒烟测试和网页生产构建。
 GitHub Actions 通过不能替代实车方向、串口和避障验收，但可以拦截缺包、pluginlib、参数类型、
-State Lattice、行为树及网页构建回归。
+RPP/Smac/STVL、行为树及网页构建回归。
 
-构建脚本固定使用 `/usr/bin/python3`（Ubuntu 24.04 的系统 Python 3.12），并隔离用户目录中的
+构建脚本固定使用 `/usr/bin/python3`（Ubuntu 22.04 的系统 Python 3.10），并隔离用户目录中的
 `uv`、Conda 或其他 Python。无需删除 `~/.local/bin/python3`，也不要为了 ROS 修改自己的 Python
 开发环境。若确实需要指定另一个兼容解释器，可设置 `CAR_SYSTEM_PYTHON`，但实车部署建议保持默认。
 
 正式运行时还会把 `/usr/lib/python3/dist-packages` 放在 `PYTHONPATH` 最前面，然后再加入用户
-Python 3.12 包和视觉工程目录。该顺序是必要约束：Ubuntu 的 `cv2` 按系统 NumPy 1.x ABI 编译，
-若 `~/.local/lib/python3.12/site-packages` 中的 NumPy 2.x 先被加载，会出现
+Python 3.10 包和视觉工程目录。该顺序是必要约束：Ubuntu 的 `cv2` 按系统 NumPy 1.x ABI 编译，
+若 `~/.local/lib/python3.10/site-packages` 中的 NumPy 2.x 先被加载，会出现
 `numpy.core.multiarray failed to import`。深度视觉入口同时显式使用 `/usr/bin/python3`，避免 shell
 中的 `python3` 被 `uv`、Conda 或用户软链接替换。
 
-不要在包含中文的项目工作空间里直接执行普通 `colcon build`。Jazzy 的 `rosidl` 代码生成可能因
-物理路径编码失败。请使用 `./validate_auto_mapping_jazzy.sh --build` 或两个一键启动脚本；它们会
-自动通过 `~/.cache/huichuan_agv_jazzy_ws` 的纯 ASCII 路径构建。
+不要在包含中文的项目工作空间里直接执行普通 `colcon build`。Humble 的 `rosidl` 代码生成可能因
+物理路径编码失败。请使用 `./validate_auto_mapping_humble.sh --build` 或两个一键启动脚本；它们会
+自动通过 `~/.cache/huichuan_agv_humble_ws` 的纯 ASCII 路径构建。
 
 推荐执行时机：
 
-- 第一次把项目复制到新的 Ubuntu/树莓派时。
+- 第一次把项目复制到新的 Ubuntu 上位机时。
 - 执行过 `apt install/upgrade` 或重新安装 ROS2 后。
-- 修改 `frontier_exploration_ros2`、`short_goal_bt`、`lidar_py`、launch 或依赖文件后。
+- 修改 `frontier_exploration_ros2`、`local_depth_cloud_cpp`、`lidar_py`、launch 或依赖文件后。
 - 启动脚本突然报缺包、插件加载失败或 C++ 编译错误时。
 
 不需要执行的情况：
 
-- 同一台已经验证通过的树莓派上，代码和依赖都没有变化，只是正常开机运行。
+- 同一台已经验证通过的上位机上，代码和依赖都没有变化，只是正常开机运行。
 - 此时可以直接执行 `./open_all.sh` 或 `./open_all_log.sh`。
 
 验证成功的最后输出应包含：
 
 ```text
-[ OK ] All Jazzy Nav2 plugins passed configure-only runtime smoke testing
-Jazzy migration preflight passed.
+[ OK ] All Humble Nav2 plugins passed configure-only runtime smoke testing
+Humble migration preflight passed.
 ```
 
 ### 8.2 普通运行
@@ -877,7 +912,8 @@ costmap 不会在 `/map` 尚未发布时阻塞启动。
 
 - 清理旧 ROS、Vite、相机、日志和串口占用进程。
 - 自动检测雷达和 STM32 串口并检查权限。
-- 在 `~/.cache/huichuan_agv_jazzy_ws` 的 ASCII 路径中编译原生 Frontier、自定义 BT 和 `lidar_py`。
+- 在 `~/.cache/huichuan_agv_humble_ws` 的 ASCII 路径中编译原生 Frontier、C++ 感知节点和 `lidar_py`；
+  行为树直接使用项目 XML 与 Humble 内置 BT 插件，不再编译旧自定义 BT 插件。
 - 构建和深度视觉入口强制使用 `/usr/bin/python3`；运行时系统 dist-packages 排在用户
   site-packages 前，避免 NumPy/OpenCV ABI 冲突。
 - 启动 ROSBridge、Cartographer、Nav2、视觉、日志节点、网页和 RViz。
@@ -909,7 +945,7 @@ SLAM_Log/open_all_log_时间/
 
 第一次 Ctrl+C 会停车、保存 Final 并有序关闭。保存期间再按一次 Ctrl+C 会立即强制结束；
 此时可能留下不完整的 Final 文件，但不需要手动查找 PID 或执行 `kill`。
-Jazzy 的 `save_map_timeout` 按秒设置，当前退出保存使用 `20.0`（20 秒）；
+Humble 的 `save_map_timeout` 按秒设置，当前退出保存使用 `20.0`（20 秒）；
 PBStream 仍由 Cartographer `/write_state` 服务保存。
 
 `runtime_stack.log` 从 ROS 栈启动开始持续保存完整输出，普通版和 Log 版都会生成。终端只保留
@@ -932,7 +968,7 @@ ENABLE_VISION=true \
 USE_RVIZ=true \
 SHOW_NAVI_GUI=false \
 AUTO_START=false \
-NAV_PROFILE=jazzy_native \
+NAV_PROFILE=humble_native \
 ./open_all.sh
 ```
 
@@ -941,7 +977,7 @@ NAV_PROFILE=jazzy_native \
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `ROS_DOMAIN_ID` | `88` | ROS2 Domain ID。 |
-| `NAV_PROFILE` | `jazzy_native` | 固定使用 Jazzy 原生导航链；旧 Foxy/Hybrid 配置已移除。 |
+| `NAV_PROFILE` | `humble_native` | 固定使用 Humble 原生导航链；旧 Foxy/Hybrid 配置已移除。 |
 | `AUTO_START` | `false` | 是否启动后立即自动 Frontier 探索。实车建议保持 false。 |
 | `ENABLE_VISION` | `true` | 是否启动 Gemini2 视觉避障。 |
 | `START_WEB` | `true` | 是否启动网页。 |
@@ -995,7 +1031,7 @@ X11 转发。若 `pgrep` 没有 `rviz2`，查看启动终端中最早出现的 R
 ## 9. 推荐操作流程
 
 1. 先给底盘、伺服、雷达和相机供电。
-2. 在启动 STM32/下位机之前接好树莓派 USB 串口线。
+2. 在启动 STM32/下位机之前接好上位机 USB 串口线。
 3. 运行 `./open_all.sh` 或 `./open_all_log.sh`。
 4. 等待终端所有 `[ready]` 检查通过。
 5. 打开终端打印的局域网页地址。
@@ -1085,9 +1121,8 @@ SHA256:
 - “清除标记”原先会顺带取消正在执行的 Nav2 目标；现在只清标记和预览路径。
 - IMU 上行帧注释从错误的 21 字节修正为 23 字节。
 - STM32 编码器帧注释从错误的 34 字节修正为 35 字节。
-- Jazzy 地图保存超时使用 `20.0` 秒；PBStream 请求只传递 Cartographer 支持的文件名。
-- State Lattice JSON 会先解析校验，再复制到 `/tmp/car_nav2_jazzy_用户ID/` 的纯 ASCII 路径，
-  避免中文工程目录导致 planner 无法重新打开文件。
+- Humble 地图保存超时使用 `20.0` 秒；PBStream 请求只传递 Cartographer 支持的文件名。
+- 正式导航已不读取 State Lattice JSON；规划器只加载系统 Humble 的 `SmacPlanner2D`。
 - 一键启动会检查 Nav2 lifecycle 状态和 `/navigate_to_pose`，不会再把仅有节点名但配置失败的
   `planner_server` 误报为 ready。
 - `lidar_py` 补充 `cartographer_ros_msgs` 运行依赖并更新包描述。
@@ -1096,7 +1131,7 @@ SHA256:
 未修改：
 
 - Cartographer 定版参数。
-- 二档速度、车体 footprint 和视觉融合的实车约束；Jazzy Nav2 策略来自 `auto_mapping_v1`。
+- 二档速度、车体 footprint 和视觉融合的实车约束；Humble Nav2 策略来自 `auto_mapping_v1`。
 - 车体 footprint、轮径、轮距、速度档位和视觉避障调参值。
 - `open_all.sh` 普通版不保存 Final、`open_all_log.sh` 保存三个 Final 文件的职责边界。
 
@@ -1109,7 +1144,7 @@ ss -ltnp | grep 9090
 ros2 node list
 ```
 
-确认网页使用 `ws://树莓派IP:9090`，且两端在同一局域网。
+确认网页使用 `ws://上位机IP:9090`，且两端在同一局域网。
 
 ### 有地图但车不动
 
@@ -1166,6 +1201,11 @@ Frontier 默认要求 `/map`、`/robot_pose`、全局 costmap 和 Nav2 action �
 拒绝启动。不要绕过该检查；优先排查旧进程、同一 `ROS_DOMAIN_ID` 下的第二台 ROS 主机，
 以及重复的底盘/雷达节点。
 
+若日志持续出现 `NAVI_FEEDBACK_UNVERIFIED`，并且 `[NAVI]` 的 `yaw/vx/vz` 在车辆实际运动时
+仍全部为零，说明 20 字节 `0x07` 帧虽然校验和与 MCU tick 正常，但运动字段没有更新。系统会在
+编码器或 Cartographer 确认运动后输出 `NAVI_MOTION_FEEDBACK_FAULT`，抢回 MOVE、锁存零速并
+禁止继续运动。此时必须停止本次建图并检查日志中的 `raw_hex`；不能继续靠扫描匹配硬跑。
+
 ### 地图停止更新，过一段时间突然追帧
 
 先找到启动摘要打印的 `Runtime log` 路径，再检查：
@@ -1194,3 +1234,87 @@ LIDAR_PORT=/dev/ttyUSB1 CHASSIS_PORT=/dev/ttyUSB0 ./open_all.sh
 ```
 
 不要让两个节点同时打开同一个串口。
+
+## 双分辨率3D导航配置
+
+安装 Humble 的 RTAB-Map、robot_localization、Nav2 RPP 和 C++ STVL：
+
+```bash
+chmod +x STEP0_INSTALL_VISUAL_SLAM_DEPS.sh START_DUAL_2D_3D_NAVIGATION*.sh
+./STEP0_INSTALL_VISUAL_SLAM_DEPS.sh
+```
+
+稳定导航版：
+
+```bash
+./START_DUAL_2D_3D_NAVIGATION.sh
+```
+
+使用 Cartographer + SmacPlanner2D + RPP + STVL + C++近碰撞门，不启用视觉 EKF。
+首次测试必须先用此版本确认二维地图不歪、动态障碍能清除。
+
+当前规划障碍链分为三层：
+
+| 层 | 输入 | 记忆 | 作用 |
+|---|---|---:|---|
+| 静态结构 | Cartographer `/map` | 持续随地图更新 | 概率值达到 65 的墙体进入局部和全局 costmap，雷达暂时扫不到也不能穿越。 |
+| 动态低障碍 | 三帧几何确认的 Gemini2 点云 | 局部 4 秒、全局 8 秒 | 人、箱子和低矮障碍的平滑动态绕行。 |
+| 视觉结构 | RTAB-Map 过滤后的垂直墙 | 15 秒并由完整视觉地图续期 | 补充 2D 雷达盲区中的历史墙体，过滤地面方块。 |
+
+RViz 默认显示的 `Nav2 Local Costmap (8x8 m near robot)` 只覆盖车周围 8 米见方，
+所以远处没有蓝红紫色不表示全局规划器认为那里为空。需要核对“蓝色路径为什么穿墙”时，
+勾选默认关闭的 `Nav2 Global Planner Costmap (Path Audit)`；蓝色 `/plan` 必须避开该层
+的致命障碍。
+
+实测 footprint 为 `66.5 x 66.5 cm`，Nav2 每侧再保留 `1 cm` 边距，有效最小通行宽度
+约为 `68.5 cm`。膨胀半径 `0.52 m` 包含硬碰撞区和软代价区；蓝紫色软区重叠不等于整片
+都是致命障碍。`cost_scaling_factor=10.0` 使软区快速衰减，门洞中心仍可规划，但硬
+footprint 不会为了穿门被缩小。
+
+一键脚本会在放行底盘前从正在运行的
+`/local_costmap/local_costmap` 和 `/global_costmap/global_costmap` 读取上述墙体阈值与
+膨胀半径。终端必须出现四行对应的 `[ready]`；参数文件覆盖顺序错误或旧安装缓存没有更新时，
+启动会直接终止并保持运动门禁。
+
+导航版启动时会先发送 `STARTUP_PS2_RELEASE`，因此没有活动导航目标时 PS2 始终拥有控制权。
+`system_ready` 门禁只丢弃尚未就绪的上位机 Twist，不再持续发送会重新抢走手柄的 MOVE 零速帧；
+Nav2 lifecycle 同时保持未激活。这样即使 RViz 已经先打开，提前点击目标也不会在启动期间消耗
+进度超时并误入倒车/旋转恢复，也不会阻止操作员用 PS2 手动移车。终端完成 C++ 二进制版本、STM32 里程反馈、雷达、
+Cartographer、相机、点云和 C++ 碰撞输入检查后，才会一次性激活 Nav2 lifecycle，并通过
+`/robot/set_system_ready` 服务取得底盘确认后打印：
+
+```text
+[ready] Confirmed /robot/set_system_ready=true
+[ready] Startup motion interlock released; PS2/Nav2 motion is enabled.
+[ready] All three layers are running. Move slowly for the first 10 seconds.
+```
+
+PS2 在上述提示出现前后都保持可用；只有真正接受 Nav2 目标后才自动发送 MOVE 接管，
+目标成功、取消或失败后再归还 PS2。代价地图显示、Action 图发现、RTAB-Map、OctoMap 和 Frontier
+属于解锁后的非阻塞诊断；它们异常会明确警告，但不会让已经健康的手动控制和基础 Nav2
+永久失效。所有 ROS2 CLI 查询均带硬超时。未出现前三行时不要绕过门禁或另开底盘节点；
+若此前在 RViz 点过目标，请在放行后重新点一次。
+正常 Ctrl+C 退出时，底盘桥会先发送零速再归还 PS2；若已触发急停或
+`NAVI_MOTION_FEEDBACK_FAULT`，则保持锁停，不会自动归还。
+
+视觉融合实验版：
+
+```bash
+./START_DUAL_2D_3D_NAVIGATION_VISUAL_FUSION.sh
+```
+
+额外启动 RGB-D视觉里程计和 robot_localization。EKF融合视觉 `vx/vy`与 STM32绝对 yaw/前向速度；RTAB-Map用独立数据库保留长期3D图并记录视觉回环，但不发布全局 TF。
+
+关键检查：
+
+```bash
+ros2 topic hz /local_highres_cloud_v21
+ros2 topic hz /local_costmap/voxel_grid
+ros2 topic echo /local_cloud_collision_status
+ros2 topic hz /visual_odom /odometry/filtered
+ros2 run tf2_ros tf2_echo odom base_link
+grep -E "COLLISION_GATE|VISUAL_LOOP_|CARTOGRAPHER_POSE_JUMP" \
+  SLAM_Log/dual_3d_*/runtime.log | tail -n 200
+```
+
+`VISUAL_LOOP_ACCEPTED`只表示 RTAB-Map内部3D图接受视觉回环。Cartographer仍是 `map -> odom`的唯一发布者，禁止手动把 RTAB-Map `publish_tf`改为 `true`。

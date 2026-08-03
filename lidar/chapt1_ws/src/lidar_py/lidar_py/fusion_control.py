@@ -82,6 +82,65 @@ class FusionResult:
     direction: int
 
 
+@dataclass
+class ArcGainConfig:
+    """Bounds for slow online skid-steer curvature calibration."""
+
+    initial_gain: float = 1.45
+    min_gain: float = 1.10
+    max_gain: float = 1.80
+    learning_rate: float = 0.08
+    max_step_ratio: float = 0.10
+    min_linear_speed: float = 0.08
+    min_angular_speed: float = 0.03
+
+
+class AdaptiveArcGain:
+    """Estimate the yaw-command gain from desired and measured radii."""
+
+    def __init__(self, config: Optional[ArcGainConfig] = None):
+        self.config = config or ArcGainConfig()
+        self.gain = clamp(
+            self.config.initial_gain,
+            self.config.min_gain,
+            self.config.max_gain,
+        )
+
+    def observe(
+        self,
+        desired_v: float,
+        desired_w: float,
+        measured_v: float,
+        measured_w: float,
+    ) -> float:
+        cfg = self.config
+        if (
+            abs(desired_v) < cfg.min_linear_speed
+            or abs(measured_v) < cfg.min_linear_speed
+            or abs(desired_w) < cfg.min_angular_speed
+            or abs(measured_w) < cfg.min_angular_speed
+            or desired_v * measured_v <= 0.0
+            or desired_w * measured_w <= 0.0
+        ):
+            return self.gain
+
+        desired_radius = abs(desired_v / desired_w)
+        measured_radius = abs(measured_v / measured_w)
+        correction = clamp(
+            measured_radius / max(0.05, desired_radius),
+            1.0 - cfg.max_step_ratio,
+            1.0 + cfg.max_step_ratio,
+        )
+        target = clamp(
+            self.gain * correction,
+            cfg.min_gain,
+            cfg.max_gain,
+        )
+        self.gain += cfg.learning_rate * (target - self.gain)
+        self.gain = clamp(self.gain, cfg.min_gain, cfg.max_gain)
+        return self.gain
+
+
 class FusionController:
     """Stateful, deterministic arbiter that is independent of ROS."""
 
@@ -205,6 +264,7 @@ class FusionController:
         now: float,
         dt: float,
         depth_alive: bool = True,
+        allow_steering_bias: bool = True,
     ) -> FusionResult:
         cfg = self.config
         nav_v = clamp(nav_v, -cfg.max_v, cfg.max_v)
@@ -260,18 +320,22 @@ class FusionController:
         elif moving_forward and level >= 2:
             speed_scale = clamp(0.55 - 0.32 * risk - 0.10 * width_risk, 0.12, 0.55)
             target_v = nav_v * speed_scale
-            desired_w = cfg.danger_w_min + (
-                cfg.danger_w_max - cfg.danger_w_min
-            ) * max(risk, width_risk)
-            target_bias = self._minimum_turn_bias(nav_w, direction, desired_w)
+            if allow_steering_bias:
+                desired_w = cfg.danger_w_min + (
+                    cfg.danger_w_max - cfg.danger_w_min
+                ) * max(risk, width_risk)
+                target_bias = self._minimum_turn_bias(
+                    nav_w, direction, desired_w)
             mode = "avoid"
         elif moving_forward and level == 1:
             speed_scale = clamp(0.88 - 0.38 * risk - 0.12 * width_risk, 0.42, 0.88)
             target_v = nav_v * speed_scale
-            desired_w = cfg.warning_w_min + (
-                cfg.warning_w_max - cfg.warning_w_min
-            ) * max(risk, width_risk)
-            target_bias = self._minimum_turn_bias(nav_w, direction, desired_w)
+            if allow_steering_bias:
+                desired_w = cfg.warning_w_min + (
+                    cfg.warning_w_max - cfg.warning_w_min
+                ) * max(risk, width_risk)
+                target_bias = self._minimum_turn_bias(
+                    nav_w, direction, desired_w)
             mode = "caution"
 
         slew_rate = (
@@ -295,6 +359,10 @@ class FusionController:
             out_w = 0.0
         elif not moving_forward:
             out_w = nav_w
+        elif not allow_steering_bias and abs(nav_v) > 1.0e-6:
+            # Nav2 already selected the collision-free direction using MPPI
+            # and STVL. Preserve its curvature while reducing speed.
+            out_w = nav_w * clamp(abs(out_v / nav_v), 0.0, 1.0)
         else:
             out_w = clamp(nav_w + self.bias_w, -cfg.max_w, cfg.max_w)
         return FusionResult(out_v, out_w, mode, level, risk, direction)

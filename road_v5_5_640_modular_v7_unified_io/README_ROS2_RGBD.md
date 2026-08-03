@@ -108,7 +108,7 @@ ros2 topic hz /camera/depth/image_raw
 
 ```bash
 cd road_v5_5_640_modular_v6_ros2_rgbd
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash
 python3 ros2_camera_bridge.py
 ```
 
@@ -118,7 +118,7 @@ python3 ros2_camera_bridge.py
 
 ```bash
 cd road_v5_5_640_modular_v6_ros2_rgbd
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash
 python3 main.py
 ```
 

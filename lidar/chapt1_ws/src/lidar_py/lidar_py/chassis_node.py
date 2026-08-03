@@ -24,14 +24,18 @@ TF树:
 """
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped, Twist
 from sensor_msgs.msg import Imu
+from action_msgs.msg import GoalStatus, GoalStatusArray
+from action_msgs.srv import CancelGoal
 from std_msgs.msg import Int32MultiArray
 from std_msgs.msg import String, Bool
+from std_srvs.srv import SetBool
 from tf2_ros import TransformBroadcaster
 import serial
 import struct
@@ -39,6 +43,7 @@ import math
 import time
 import json
 from collections import deque
+from lidar_py.lidar_timing import AdaptiveMinimumDelayMapper
 
 
 # ========== 二进制帧协议定义 ==========
@@ -125,15 +130,41 @@ class ChassisNode(Node):
         self.declare_parameter('navi_turn_vx_scale', 0.75)
         self.declare_parameter('navi_turn_wz_threshold_rad_s', 0.25)
         self.declare_parameter('navi_vz_deadband_deg_s', 0.15)
+        self.declare_parameter('navi_max_yaw_rate_deg_s', 120.0)
+        self.declare_parameter('navi_adaptive_clock_sync', False)
+        self.declare_parameter('navi_clock_window_samples', 250)
+        self.declare_parameter('navi_clock_max_adjustment_ns', 20000)
         self.declare_parameter('cmd_vel_topic', '/cmd_vel_safe')
+        self.declare_parameter('require_depth_baseline_for_ps2', True)
         self.declare_parameter('wheel_speed_topic', '/wheel_speed_sent')
         self.declare_parameter('show_serial_window', True)
         self.declare_parameter('serial_defaults_on_start', True)
+        self.declare_parameter('auto_nav_ps2_handoff', False)
+        self.declare_parameter('nav_ps2_release_delay_sec', 0.75)
+        self.declare_parameter('nav_zero_command_cancel_sec', 25.0)
+        self.declare_parameter(
+            'nav_sensor_health_topic',
+            '/robot/navigation_sensor_healthy')
+        self.declare_parameter('nav_sensor_health_timeout_sec', 1.0)
+        self.declare_parameter('nav_sensor_fault_cancel_sec', 3.0)
+        self.declare_parameter('require_system_ready_for_motion', False)
+        self.declare_parameter('release_ps2_on_shutdown', True)
         self.declare_parameter('mapping_mode_on_start', True)
         self.declare_parameter('publish_latency_stats', True)
         self.declare_parameter('publish_stall_warn_ms', 20.0)
         self.declare_parameter('publish_latency_report_sec', 1.0)
         self.declare_parameter('serial_debug_stream_hz', 10.0)
+        self.declare_parameter('navi_motion_watchdog_enabled', True)
+        self.declare_parameter('navi_motion_watchdog_pose_enabled', False)
+        self.declare_parameter('navi_motion_watchdog_warmup_sec', 6.0)
+        self.declare_parameter('navi_motion_watchdog_window_sec', 0.75)
+        self.declare_parameter('navi_motion_watchdog_translation_m', 0.08)
+        self.declare_parameter('navi_motion_watchdog_yaw_deg', 3.0)
+        self.declare_parameter('navi_motion_watchdog_encoder_vx_mps', 0.03)
+        self.declare_parameter('navi_motion_watchdog_encoder_wz_rad_s', 0.08)
+        self.declare_parameter(
+            'navi_motion_watchdog_pose_topic',
+            '/cartographer_pose_odom')
 
         serial_port = self.get_parameter('serial_port').value
         baudrate = self.get_parameter('baudrate').value
@@ -175,11 +206,45 @@ class ChassisNode(Node):
             float(self.get_parameter('navi_turn_wz_threshold_rad_s').value))
         self.navi_vz_deadband_rad_s = math.radians(
             abs(float(self.get_parameter('navi_vz_deadband_deg_s').value)))
+        self.navi_max_yaw_rate_rad_s = math.radians(max(
+            1.0, abs(float(
+                self.get_parameter('navi_max_yaw_rate_deg_s').value))))
+        self.navi_yaw_limited_count = 0
+        self.navi_yaw_limit_last_warn_ns = 0
+        self.navi_adaptive_clock_sync = bool(
+            self.get_parameter('navi_adaptive_clock_sync').value)
+        self.navi_clock_mapper = AdaptiveMinimumDelayMapper(
+            window_size=max(2, int(
+                self.get_parameter('navi_clock_window_samples').value)),
+            max_adjustment_ns=max(1, int(
+                self.get_parameter('navi_clock_max_adjustment_ns').value)),
+        )
         self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').value
         self.wheel_speed_topic = self.get_parameter('wheel_speed_topic').value
         self.show_serial_window = self.get_parameter('show_serial_window').value
         self.serial_defaults_on_start = bool(
             self.get_parameter('serial_defaults_on_start').value)
+        self.auto_nav_ps2_handoff = bool(
+            self.get_parameter('auto_nav_ps2_handoff').value)
+        self.nav_ps2_release_delay_sec = max(
+            0.2, float(
+                self.get_parameter('nav_ps2_release_delay_sec').value))
+        self.nav_zero_command_cancel_sec = max(
+            5.0, float(
+                self.get_parameter('nav_zero_command_cancel_sec').value))
+        self.nav_sensor_health_topic = str(
+            self.get_parameter('nav_sensor_health_topic').value)
+        self.nav_sensor_health_timeout_sec = max(
+            0.5, float(
+                self.get_parameter('nav_sensor_health_timeout_sec').value))
+        self.nav_sensor_fault_cancel_sec = max(
+            1.0, float(
+                self.get_parameter('nav_sensor_fault_cancel_sec').value))
+        self.require_system_ready_for_motion = bool(
+            self.get_parameter('require_system_ready_for_motion').value)
+        self.release_ps2_on_shutdown = bool(
+            self.get_parameter('release_ps2_on_shutdown').value)
+        self.system_ready = not self.require_system_ready_for_motion
         self.mapping_mode = bool(self.get_parameter('mapping_mode_on_start').value)
         self.publish_latency_stats = bool(
             self.get_parameter('publish_latency_stats').value)
@@ -191,6 +256,31 @@ class ChassisNode(Node):
             1.0, float(self.get_parameter('serial_debug_stream_hz').value))
         self.serial_debug_stream_interval_ns = int(
             1_000_000_000 / self.serial_debug_stream_hz)
+        self.navi_motion_watchdog_enabled = bool(
+            self.get_parameter('navi_motion_watchdog_enabled').value)
+        self.navi_motion_watchdog_pose_enabled = bool(
+            self.get_parameter(
+                'navi_motion_watchdog_pose_enabled').value)
+        self.navi_motion_watchdog_warmup_sec = max(
+            2.0, float(self.get_parameter(
+                'navi_motion_watchdog_warmup_sec').value))
+        self.navi_motion_watchdog_window_sec = max(
+            0.4, float(self.get_parameter(
+                'navi_motion_watchdog_window_sec').value))
+        self.navi_motion_watchdog_translation_m = max(
+            0.04, float(self.get_parameter(
+                'navi_motion_watchdog_translation_m').value))
+        self.navi_motion_watchdog_yaw_rad = math.radians(max(
+            1.5, float(self.get_parameter(
+                'navi_motion_watchdog_yaw_deg').value)))
+        self.navi_motion_watchdog_encoder_vx_mps = max(
+            0.015, float(self.get_parameter(
+                'navi_motion_watchdog_encoder_vx_mps').value))
+        self.navi_motion_watchdog_encoder_wz_rad_s = max(
+            0.04, float(self.get_parameter(
+                'navi_motion_watchdog_encoder_wz_rad_s').value))
+        self.navi_motion_watchdog_pose_topic = str(
+            self.get_parameter('navi_motion_watchdog_pose_topic').value)
 
         # ===== 运动学常量 =====
         self.effective_ppr = pulse_per_rev * gear_ratio
@@ -220,8 +310,21 @@ class ChassisNode(Node):
         self.navi_turn_sign_samples = 0
         self.navi_turn_sign_mismatches = 0
         self.navi_turn_sign_reported = False
-        self.motion_serial_enabled = True
-        self.control_mode = "move"
+        # Navigation launches start in manual mode. The system-ready interlock
+        # gates only host Twist output; it must not keep the STM32 in MOVE mode
+        # while Nav2 and the perception graph are still activating.
+        self.motion_serial_enabled = not self.auto_nav_ps2_handoff
+        self.control_mode = (
+            "move" if self.motion_serial_enabled else "ps2")
+        self.nav_action_active = False
+        self.nav_action_last_active_time = time.monotonic()
+        self.nav_last_effective_cmd_monotonic = time.monotonic()
+        self.nav_stall_cancel_pending = False
+        self.nav_stall_cancel_last_warn_monotonic = 0.0
+        self.nav_sensor_health_seen = False
+        self.nav_sensor_healthy = False
+        self.nav_sensor_health_time = 0.0
+        self.nav_sensor_fault_since = 0.0
         self.echo_enabled = False
         self.software_estop = False
         self.baseline_ready = False
@@ -247,6 +350,7 @@ class ChassisNode(Node):
         self.navi_frame_count = 0
         self.latest_navi_tick_ms = 0
         self.navi_unwrapped_yaw_rad = None
+        self.navi_last_raw_yaw_rad = None
         self.navi_tick_last_raw = None
         self.navi_tick_unwrapped_ms = None
         self.navi_tick_offset_ns = None
@@ -254,6 +358,24 @@ class ChassisNode(Node):
         self.latest_measurement_stamp = None
         self.latest_measurement_seq = 0
         self.published_measurement_seq = -1
+        self.node_start_monotonic = time.monotonic()
+        self.navi_last_motion_monotonic = self.node_start_monotonic
+        self.navi_last_linear_motion_monotonic = self.node_start_monotonic
+        self.navi_last_angular_motion_monotonic = self.node_start_monotonic
+        self.navi_last_frame_monotonic = None
+        self.navi_watchdog_last_raw_yaw_rad = None
+        self.navi_motion_fault = False
+        self.navi_motion_fault_reason = ""
+        self.startup_hold_last_warn_monotonic = 0.0
+        self.navi_all_zero_frame_count = 0
+        self.navi_all_zero_warned = False
+        self.cartographer_motion_window = deque(maxlen=200)
+        self.encoder_observer_last_pos = None
+        self.encoder_observer_last_time = None
+        self.encoder_observer_vx = 0.0
+        self.encoder_observer_wz = 0.0
+        self.encoder_observer_frame_count = 0
+        self.encoder_motion_candidate_since = None
 
         self._publish_latency = {
             name: {'count': 0, 'total_ms': 0.0, 'max_ms': 0.0, 'over': 0}
@@ -302,15 +424,47 @@ class ChassisNode(Node):
             Bool, '/depth/baseline_ready', self._on_baseline_ready, 10)
         self.software_estop_sub = self.create_subscription(
             Bool, '/robot/emergency_stop', self._on_software_estop, 10)
+        self.system_ready_sub = self.create_subscription(
+            Bool, '/robot/system_ready', self._on_system_ready, 10)
+        self.system_ready_service = self.create_service(
+            SetBool,
+            '/robot/set_system_ready',
+            self._on_set_system_ready,
+        )
+        self.nav_status_sub = self.create_subscription(
+            GoalStatusArray,
+            '/navigate_to_pose/_action/status',
+            self._on_nav_status,
+            10,
+        )
+        self.nav_sensor_health_sub = self.create_subscription(
+            Bool,
+            self.nav_sensor_health_topic,
+            self._on_nav_sensor_health,
+            10,
+        )
+        self.nav_cancel_client = self.create_client(
+            CancelGoal, '/navigate_to_pose/_action/cancel_goal')
+        self.navi_motion_watchdog_pose_sub = None
+        if self.navi_motion_watchdog_pose_enabled:
+            self.navi_motion_watchdog_pose_sub = self.create_subscription(
+                Odometry,
+                self.navi_motion_watchdog_pose_topic,
+                self._on_cartographer_pose_odom,
+                10,
+            )
 
         # ===== 定时器 =====
         self.create_timer(0.005, self.read_serial)
         if self.odom_publish_mode == 'timer' or not self.use_navi_odom:
             self.create_timer(1.0 / publish_rate, self.publish_odometry)
         self.create_timer(0.5, self._publish_control_state)
+        if self.auto_nav_ps2_handoff:
+            self.create_timer(0.10, self._auto_nav_ps2_handoff_tick)
         if self.publish_latency_stats:
             self.create_timer(
                 self.publish_latency_report_sec, self._report_publish_latency)
+        self.create_timer(0.10, self._motion_safety_hold_tick)
 
         # ===== 统计 =====
         self.frame_count = 0
@@ -336,7 +490,14 @@ class ChassisNode(Node):
             f"  NAVI odom yaw source={self.navi_odom_yaw_source}, "
             f"publish_mode={self.odom_publish_mode}, "
             f"vx_scale={self.navi_vx_scale:.3f}, turn_vx_scale={self.navi_turn_vx_scale:.3f}, "
-            f"vz_deadband={math.degrees(self.navi_vz_deadband_rad_s):.2f}deg/s\n"
+            f"vz_deadband={math.degrees(self.navi_vz_deadband_rad_s):.2f}deg/s, "
+            f"max_yaw_rate={math.degrees(self.navi_max_yaw_rate_rad_s):.1f}deg/s\n"
+            f"  NAVI motion watchdog={self.navi_motion_watchdog_enabled}, "
+            f"pose_cross_check={self.navi_motion_watchdog_pose_enabled}, "
+            f"window={self.navi_motion_watchdog_window_sec:.2f}s, "
+            f"pose_gate={self.navi_motion_watchdog_translation_m:.2f}m/"
+            f"{math.degrees(self.navi_motion_watchdog_yaw_rad):.1f}deg, "
+            f"startup_hold={self.require_system_ready_for_motion}\n"
             f"  协议: NAVI帧(20B AA55 cmd=0x07) + ECHO帧(20B AA55) + 编码器帧(35B AA55) + IMU帧(23B AA56)"
         )
 
@@ -345,13 +506,20 @@ class ChassisNode(Node):
 
         self.startup_default_queue = []
         if self.serial_defaults_on_start:
+            startup_mode = (
+                (CTRL_CMD_PS2, [0, 0, 0, 0], "STARTUP_PS2_RELEASE")
+                if self.auto_nav_ps2_handoff
+                else (CTRL_CMD_MOVE, [0, 0, 0, 0], "STARTUP_MOVE_TAKEOVER")
+            )
             self.startup_default_queue = [
                 (CTRL_CMD_ECHO_OFF, [0, 0, 0, 0], "STARTUP_ECHO_OFF"),
-                (CTRL_CMD_MOVE, [0, 0, 0, 0], "STARTUP_MOVE_TAKEOVER"),
+                startup_mode,
             ]
         self.startup_defaults_timer = self.create_timer(0.20, self._startup_defaults_tick)
 
     def _timed_publish(self, channel, publisher, message):
+        if not rclpy.ok():
+            return
         if not self.publish_latency_stats:
             publisher.publish(message)
             return
@@ -363,6 +531,8 @@ class ChassisNode(Node):
             self._record_publish_latency(channel, start_ns)
 
     def _timed_send_transform(self, transform):
+        if not rclpy.ok():
+            return
         if not self.publish_latency_stats:
             self.tf_broadcaster.sendTransform(transform)
             return
@@ -408,7 +578,13 @@ class ChassisNode(Node):
         ros_sec = self.get_clock().now().nanoseconds / 1_000_000_000.0
         self.get_logger().info(
             f"PUBLISH_LATENCY window_sec={window_sec:.3f} ros_sec={ros_sec:.6f} "
-            + ' '.join(parts))
+            + ' '.join(parts)
+            + (
+                f" navi_watchdog[fault={self.navi_motion_fault},"
+                f"enc_frames={self.encoder_observer_frame_count},"
+                f"enc_vx={self.encoder_observer_vx:+.3f},"
+                f"enc_wz={self.encoder_observer_wz:+.3f}]"
+            ))
 
     def _connect_serial(self):
         for attempt in range(10):
@@ -505,6 +681,7 @@ class ChassisNode(Node):
                 if checksum == frame[ENC_OFFSET_CKSUM]:
                     self._buffer = self._buffer[ENC_FRAME_LEN:]
                     self._append_serial_line(self._format_rx_frame(frame, "ENC_AA55_35B", True, checksum))
+                    self._observe_encoder_frame(frame)
                     if not self.use_navi_odom:
                         self._process_encoder_frame(frame)
                 else:
@@ -535,6 +712,187 @@ class ChassisNode(Node):
 
             else:
                 del self._buffer[:1]
+
+    def _navi_feedback_static_channels(self, now_monotonic: float):
+        if self.navi_frame_count < 20:
+            return False, False
+        if self.navi_last_frame_monotonic is None:
+            return False, False
+        if now_monotonic - self.navi_last_frame_monotonic > 0.50:
+            return True, True
+        return (
+            now_monotonic - self.navi_last_linear_motion_monotonic
+            >= self.navi_motion_watchdog_window_sec,
+            now_monotonic - self.navi_last_angular_motion_monotonic
+            >= self.navi_motion_watchdog_window_sec,
+        )
+
+    def _observe_encoder_frame(self, frame):
+        """Observe legacy wheel frames without changing NAVI-owned odometry."""
+        pos = list(struct.unpack_from('<4i', frame, ENC_OFFSET_POS))
+        now = time.monotonic()
+        self.encoder_observer_frame_count += 1
+        if (
+                self.encoder_observer_last_pos is None
+                or self.encoder_observer_last_time is None):
+            self.encoder_observer_last_pos = pos
+            self.encoder_observer_last_time = now
+            return
+
+        dt = now - self.encoder_observer_last_time
+        previous = self.encoder_observer_last_pos
+        self.encoder_observer_last_pos = pos
+        self.encoder_observer_last_time = now
+        if dt <= 0.002 or dt > 0.50:
+            self.encoder_motion_candidate_since = None
+            return
+
+        # Normalize signed int32 counter wrap before converting to metres.
+        dp = [
+            ((pos[i] - previous[i] + (1 << 31)) % (1 << 32)) - (1 << 31)
+            for i in range(4)
+        ]
+        factor = (2.0 * math.pi * self.wheel_radius) / self.effective_ppr
+        d_m = [dp[i] * factor * MOTOR_SIGN[i] for i in range(4)]
+        dx = sum(d_m) / 4.0
+        dtheta = (
+            d_m[0] + d_m[2] - d_m[1] - d_m[3]
+        ) / self.track_width
+        vx = dx / dt
+        wz = dtheta / dt
+        if not math.isfinite(vx) or not math.isfinite(wz):
+            return
+        if abs(vx) > 2.0 or abs(wz) > 8.0:
+            self.encoder_motion_candidate_since = None
+            return
+        self.encoder_observer_vx = vx
+        self.encoder_observer_wz = wz
+
+        moving = (
+            abs(vx) >= self.navi_motion_watchdog_encoder_vx_mps
+            or abs(wz) >= self.navi_motion_watchdog_encoder_wz_rad_s
+        )
+        watchdog_ready = (
+            self.navi_motion_watchdog_enabled
+            and now - self.node_start_monotonic
+            >= self.navi_motion_watchdog_warmup_sec
+        )
+        linear_static, angular_static = (
+            self._navi_feedback_static_channels(now))
+        feedback_mismatch = (
+            abs(vx) >= self.navi_motion_watchdog_encoder_vx_mps
+            and linear_static
+        ) or (
+            abs(wz) >= self.navi_motion_watchdog_encoder_wz_rad_s
+            and angular_static
+        )
+        if (
+                not moving
+                or not watchdog_ready
+                or not feedback_mismatch):
+            self.encoder_motion_candidate_since = None
+            return
+
+        if self.encoder_motion_candidate_since is None:
+            self.encoder_motion_candidate_since = now
+            return
+        if now - self.encoder_motion_candidate_since < 0.25:
+            return
+        self._trigger_navi_motion_fault(
+            "encoder_reports_motion_while_navi_static "
+            f"encoder_vx={vx:+.3f}m/s encoder_wz={wz:+.3f}rad/s "
+            f"navi_vx={self.current_vx:+.3f}m/s "
+            f"navi_wz={self.current_vz:+.3f}rad/s"
+        )
+
+    def _on_cartographer_pose_odom(self, msg: Odometry):
+        if (
+                not self.navi_motion_watchdog_enabled
+                or not self.navi_motion_watchdog_pose_enabled
+                or self.navi_motion_fault):
+            return
+        now = time.monotonic()
+        if (
+                now - self.node_start_monotonic
+                < self.navi_motion_watchdog_warmup_sec):
+            self.cartographer_motion_window.clear()
+            return
+
+        position = msg.pose.pose.position
+        orientation = msg.pose.pose.orientation
+        siny_cosp = 2.0 * (
+            orientation.w * orientation.z
+            + orientation.x * orientation.y)
+        cosy_cosp = 1.0 - 2.0 * (
+            orientation.y * orientation.y
+            + orientation.z * orientation.z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+        self.cartographer_motion_window.append(
+            (now, float(position.x), float(position.y), yaw))
+
+        cutoff = now - self.navi_motion_watchdog_window_sec
+        while (
+                len(self.cartographer_motion_window) >= 2
+                and self.cartographer_motion_window[1][0] <= cutoff):
+            self.cartographer_motion_window.popleft()
+        if len(self.cartographer_motion_window) < 2:
+            return
+        baseline = self.cartographer_motion_window[0]
+        if now - baseline[0] < 0.8 * self.navi_motion_watchdog_window_sec:
+            return
+        distance = math.hypot(
+            float(position.x) - baseline[1],
+            float(position.y) - baseline[2])
+        yaw_delta = self._wrap_pi(yaw - baseline[3])
+        linear_static, angular_static = (
+            self._navi_feedback_static_channels(now))
+        translation_mismatch = (
+            distance >= self.navi_motion_watchdog_translation_m
+            and linear_static
+        )
+        yaw_mismatch = (
+            abs(yaw_delta) >= self.navi_motion_watchdog_yaw_rad
+            and angular_static
+        )
+        if not translation_mismatch and not yaw_mismatch:
+            return
+        self._trigger_navi_motion_fault(
+            "cartographer_reports_motion_while_navi_static "
+            f"window={now - baseline[0]:.3f}s "
+            f"translation={distance:.3f}m "
+            f"yaw={math.degrees(yaw_delta):+.2f}deg "
+            f"navi_vx={self.current_vx:+.3f}m/s "
+            f"navi_wz={self.current_vz:+.3f}rad/s"
+        )
+
+    def _trigger_navi_motion_fault(self, reason: str):
+        if self.navi_motion_fault:
+            return
+        self.navi_motion_fault = True
+        self.navi_motion_fault_reason = reason
+        self.software_estop = True
+        # A zero-speed MOVE takes authority away from PS2 and holds the chassis
+        # stopped. The fault remains latched until this node is restarted.
+        self.motion_serial_enabled = True
+        self.control_mode = "move"
+        self.nav_action_active = False
+        self.get_logger().fatal(
+            "NAVI_MOTION_FEEDBACK_FAULT "
+            f"{reason}; action=latched_zero_move_hold restart_required=true"
+        )
+        self._send_ctrl_frame(
+            CTRL_CMD_MOVE, [0, 0, 0, 0],
+            "NAVI_MOTION_FEEDBACK_FAULT_ZERO_HOLD")
+        self._publish_control_state()
+
+    def _motion_safety_hold_tick(self):
+        if self.navi_motion_fault:
+            self._send_ctrl_frame(
+                CTRL_CMD_MOVE, [0, 0, 0, 0],
+                "NAVI_MOTION_FEEDBACK_FAULT_ZERO_HOLD")
+        # Before system_ready, host Twist is discarded in
+        # _send_cmd_vel_to_stm32(). Do not send MOVE frames here: an idle
+        # navigation launch deliberately leaves the STM32 under PS2 control.
 
     def _process_encoder_frame(self, frame):
         """处理编码器帧，更新里程计。"""
@@ -601,16 +959,80 @@ class ChassisNode(Node):
     def _wrap_pi(angle_rad: float) -> float:
         return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
 
-    def _unwrap_navi_yaw(self, yaw_rad: float) -> float:
+    def _update_navi_yaw(self, yaw_rad: float, dt=None, gyro_z_rad_s=0.0):
+        """Fuse short-term gyro prediction with gated absolute yaw.
+
+        The lower controller can occasionally emit impossible absolute-yaw
+        steps and then drift slowly back. Rebasing on the bad sample lets that
+        slow recovery leak into odometry. Instead, advance a virtual absolute
+        reference with the measured gyro while the absolute measurement is
+        outside the innovation/rate gate.
+        """
         yaw_rad = self._wrap_pi(yaw_rad)
         if self.navi_unwrapped_yaw_rad is None:
             self.navi_unwrapped_yaw_rad = yaw_rad
-            return self.navi_unwrapped_yaw_rad
+            self.navi_last_raw_yaw_rad = yaw_rad
+            return self.navi_unwrapped_yaw_rad, 0.0, 0.0, False
 
-        prev_wrapped = self._wrap_pi(self.navi_unwrapped_yaw_rad)
-        delta = self._wrap_pi(yaw_rad - prev_wrapped)
-        self.navi_unwrapped_yaw_rad += delta
-        return self.navi_unwrapped_yaw_rad
+        if self.navi_last_raw_yaw_rad is None:
+            self.navi_last_raw_yaw_rad = self._wrap_pi(
+                self.navi_unwrapped_yaw_rad)
+        raw_delta = self._wrap_pi(yaw_rad - self.navi_last_raw_yaw_rad)
+        # A missing/invalid dt means the MCU clock reset or this sample arrived
+        # out of order. Preserve the last accepted heading instead of applying
+        # an unbounded absolute jump.
+        accepted_delta = 0.0 if dt is None else raw_delta
+        limited = False
+        if dt is not None and 0.0 < dt <= 0.5:
+            max_delta = self.navi_max_yaw_rate_rad_s * dt
+            predicted_delta = max(
+                -max_delta,
+                min(max_delta, float(gyro_z_rad_s) * dt),
+            )
+            innovation = self._wrap_pi(raw_delta - predicted_delta)
+            innovation_gate = max(math.radians(2.0), 0.75 * max_delta)
+            if (abs(raw_delta) > max_delta
+                    or abs(innovation) > innovation_gate):
+                accepted_delta = predicted_delta
+                limited = True
+                self.navi_yaw_limited_count += 1
+                self.navi_last_raw_yaw_rad = self._wrap_pi(
+                    self.navi_last_raw_yaw_rad + predicted_delta)
+            else:
+                self.navi_last_raw_yaw_rad = yaw_rad
+        elif dt is not None:
+            self.navi_last_raw_yaw_rad = yaw_rad
+
+        self.navi_unwrapped_yaw_rad += accepted_delta
+        return (
+            self.navi_unwrapped_yaw_rad,
+            raw_delta,
+            accepted_delta,
+            limited,
+        )
+
+    def _warn_limited_navi_yaw(
+            self, raw_delta: float, accepted_delta: float, dt: float,
+            frame: bytes = b"", yaw_raw: int = 0, vx_raw: int = 0,
+            vz_raw: int = 0, tick_raw: int = 0):
+        now_ns = self.get_clock().now().nanoseconds
+        if now_ns - self.navi_yaw_limit_last_warn_ns < 1_000_000_000:
+            return
+        self.navi_yaw_limit_last_warn_ns = now_ns
+        frame_hex = " ".join(f"{byte:02X}" for byte in frame)
+        checksum = (sum(frame[:CTRL_OFFSET_CKSUM]) & 0xFF) if frame else -1
+        received_checksum = frame[CTRL_OFFSET_CKSUM] if len(frame) >= CTRL_FRAME_LEN else -1
+        self.get_logger().warn(
+            "NAVI_YAW_RATE_LIMIT "
+            f"raw_step={math.degrees(raw_delta):+.2f}deg "
+            f"accepted_step={math.degrees(accepted_delta):+.2f}deg "
+            f"dt={dt * 1000.0:.1f}ms "
+            f"limit={math.degrees(self.navi_max_yaw_rate_rad_s):.1f}deg/s "
+            "action=reject_absolute_use_gyro_prediction "
+            f"count={self.navi_yaw_limited_count} "
+            f"raw=[yaw={yaw_raw},vx={vx_raw},vz={vz_raw},tick={tick_raw}] "
+            f"checksum=0x{received_checksum:02X}/calc=0x{checksum:02X} "
+            f"hex={frame_hex}")
 
     def _navi_sample_time(self, tick_raw: int, receipt_time):
         """Map STM32 HAL_GetTick milliseconds into the ROS clock domain."""
@@ -629,6 +1051,7 @@ class ChassisNode(Node):
         if reset:
             self.navi_tick_unwrapped_ms = int(tick_raw)
             self.navi_tick_offset_ns = None
+            self.navi_clock_mapper.reset()
             dt = None
         else:
             self.navi_tick_unwrapped_ms += int(delta_ms)
@@ -641,21 +1064,30 @@ class ChassisNode(Node):
         # that fixed wire time aligns the MCU sampling instant more closely
         # with host-stamped LiDAR data. Keep the minimum observed offset so OS
         # scheduling delays cannot move measurements forward and backward.
+        # STEP11 optionally uses a recent minimum-delay window with bounded
+        # slew so long runs also follow slow MCU/host oscillator drift.
         wire_time_ns = int((20.0 * 10.0 / self.baudrate) * 1e9)
         candidate_offset = (
             receipt_time.nanoseconds
             - self.navi_tick_unwrapped_ms * 1_000_000
             - wire_time_ns
         )
-        if self.navi_tick_offset_ns is None:
-            self.navi_tick_offset_ns = candidate_offset
-        elif candidate_offset < self.navi_tick_offset_ns:
-            self.navi_tick_offset_ns = candidate_offset
-
-        mapped_ns = (
-            self.navi_tick_offset_ns
-            + self.navi_tick_unwrapped_ms * 1_000_000
-        )
+        if self.navi_adaptive_clock_sync:
+            mapped_ns = self.navi_clock_mapper.map_ms(
+                self.navi_tick_unwrapped_ms,
+                receipt_time.nanoseconds,
+                wire_time_ns,
+            )
+            self.navi_tick_offset_ns = self.navi_clock_mapper.offset_ns
+        else:
+            if self.navi_tick_offset_ns is None:
+                self.navi_tick_offset_ns = candidate_offset
+            elif candidate_offset < self.navi_tick_offset_ns:
+                self.navi_tick_offset_ns = candidate_offset
+            mapped_ns = (
+                self.navi_tick_offset_ns
+                + self.navi_tick_unwrapped_ms * 1_000_000
+            )
         if (self.latest_measurement_stamp is not None
                 and mapped_ns <= self.latest_measurement_stamp.nanoseconds):
             mapped_ns = self.latest_measurement_stamp.nanoseconds + 1
@@ -672,7 +1104,39 @@ class ChassisNode(Node):
         vx = 0.0 if abs(raw_vx) < self.navi_vx_deadband_mps else raw_vx * self.navi_vx_scale
         if abs(vz_rad) >= self.navi_turn_wz_threshold_rad_s:
             vx *= self.navi_turn_vx_scale
-        yaw_rad_measured = self._unwrap_navi_yaw(math.radians(yaw_deg))
+        yaw_rad_raw = self._wrap_pi(math.radians(yaw_deg))
+
+        watchdog_now = time.monotonic()
+        self.navi_last_frame_monotonic = watchdog_now
+        if yaw_raw == 0 and vx_raw == 0 and vz_raw == 0:
+            self.navi_all_zero_frame_count += 1
+            if (
+                    self.navi_all_zero_frame_count >= 100
+                    and not self.navi_all_zero_warned):
+                self.navi_all_zero_warned = True
+                self.get_logger().warn(
+                    "NAVI_FEEDBACK_UNVERIFIED "
+                    "yaw/vx/vz stayed exactly zero for 100 frames while "
+                    f"mcu_tick advances (tick={tick_raw}ms). Use only a short "
+                    "low-speed first motion; the cross-sensor watchdog will "
+                    "latch zero-speed MOVE if the vehicle moves without 0x07 "
+                    f"feedback. raw_hex={self._hex(frame)}")
+        else:
+            self.navi_all_zero_frame_count = 0
+            self.navi_all_zero_warned = False
+        yaw_motion = False
+        if self.navi_watchdog_last_raw_yaw_rad is not None:
+            yaw_motion = abs(self._wrap_pi(
+                yaw_rad_raw
+                - self.navi_watchdog_last_raw_yaw_rad)) >= math.radians(0.10)
+        self.navi_watchdog_last_raw_yaw_rad = yaw_rad_raw
+        if abs(raw_vx) >= 0.008:
+            self.navi_last_linear_motion_monotonic = watchdog_now
+        if yaw_motion or abs(vz_rad) >= 0.015:
+            self.navi_last_angular_motion_monotonic = watchdog_now
+        if yaw_motion or abs(raw_vx) >= 0.008 or abs(vz_rad) >= 0.015:
+            self.navi_last_motion_monotonic = watchdog_now
+            self.encoder_motion_candidate_since = None
 
         self.navi_frame_count += 1
         receipt_time = self.get_clock().now()
@@ -684,6 +1148,7 @@ class ChassisNode(Node):
         if self.first_frame:
             self.first_frame = False
             self.last_frame_time = sample_time
+            yaw_rad_measured, _, _, _ = self._update_navi_yaw(yaw_rad_raw)
             if self.navi_odom_yaw_source == 'absolute':
                 self.odom_theta = self._wrap_pi(yaw_rad_measured)
             self.current_vx = vx
@@ -701,8 +1166,7 @@ class ChassisNode(Node):
             (sample_time - self.last_frame_time).nanoseconds / 1e9)
         self.last_frame_time = sample_time
         if dt <= 0.0 or dt > 0.5:
-            if self.navi_odom_yaw_source == 'absolute':
-                self.odom_theta = self._wrap_pi(yaw_rad_measured)
+            yaw_rad_measured, _, _, _ = self._update_navi_yaw(yaw_rad_raw)
             self.current_vx = vx
             self.current_vz = vz_rad
             if self.publish_imu or self.publish_cartographer_planar_imu:
@@ -710,14 +1174,22 @@ class ChassisNode(Node):
             self._publish_navi_odometry(sample_time)
             return
 
+        yaw_rad_measured, raw_yaw_delta, _, yaw_limited = (
+            self._update_navi_yaw(yaw_rad_raw, dt, vz_rad))
         old_theta = self.odom_theta
         if self.navi_odom_yaw_source == 'absolute':
             self.odom_theta = self._wrap_pi(yaw_rad_measured)
             dtheta = self._wrap_pi(self.odom_theta - old_theta)
+            effective_wz = dtheta / dt
+            if yaw_limited:
+                self._warn_limited_navi_yaw(
+                    raw_yaw_delta, dtheta, dt, frame,
+                    yaw_raw, vx_raw, vz_raw, tick_raw)
         else:
             used_vz = 0.0 if abs(vz_rad) < self.navi_vz_deadband_rad_s else vz_rad
             dtheta = used_vz * dt
             self.odom_theta = self._wrap_pi(old_theta + dtheta)
+            effective_wz = used_vz
 
         # In absolute-yaw mode the measured yaw derivative and gyro z must
         # have the same ROS sign. A persistent disagreement makes Cartographer
@@ -749,19 +1221,21 @@ class ChassisNode(Node):
         self.odom_y += ds * math.sin(mid_theta)
         self.current_vx = vx
         self.current_vy = 0.0
-        self.current_vz = vz_rad
+        self.current_vz = effective_wz
         self.imu_yaw = yaw_deg
-        self.imu_gyro_z = vz_deg_s
+        self.imu_gyro_z = math.degrees(effective_wz)
         self.imu_available = True
 
         if self.publish_imu or self.publish_cartographer_planar_imu:
-            self._publish_navi_imu(yaw_rad_measured, vz_rad, sample_time)
+            self._publish_navi_imu(
+                yaw_rad_measured, effective_wz, sample_time)
         self._publish_navi_odometry(sample_time)
 
         if self.navi_frame_count <= 20 or self.navi_frame_count % 100 == 0:
             self.get_logger().info(
                 f"[NAVI {self.navi_frame_count}] yaw={yaw_deg:+.2f}deg "
                 f"vx={vx:+.3f}m/s raw_vx={raw_vx:+.3f}m/s vz={vz_rad:+.3f}rad/s "
+                f"used_wz={effective_wz:+.3f}rad/s "
                 f"tick_ms={tick_raw} time={'mcu' if has_mcu_tick else 'host'} "
                 f"odom_yaw_source={self.navi_odom_yaw_source} "
                 f"pose=({self.odom_x:.3f},{self.odom_y:.3f},{self.odom_theta:.3f})"
@@ -1209,8 +1683,59 @@ class ChassisNode(Node):
         self._publish_control_state()
 
     def _on_software_estop(self, msg: Bool):
+        if self.navi_motion_fault and not bool(msg.data):
+            self.get_logger().warn(
+                "NAVI motion feedback fault is latched; restart is required "
+                "before emergency stop can be cleared")
+            self._publish_control_state()
+            return
         self.software_estop = bool(msg.data)
         self._publish_control_state()
+
+    def _set_system_ready(self, ready: bool, source: str):
+        if not self.require_system_ready_for_motion:
+            self.system_ready = True
+            return "motion interlock is disabled for this launch profile"
+
+        ready = bool(ready)
+        changed = ready != self.system_ready
+        self.system_ready = ready
+        if ready:
+            if not self.nav_action_active:
+                self.nav_action_last_active_time = (
+                    time.monotonic() - self.nav_ps2_release_delay_sec)
+            if changed:
+                self.get_logger().info(
+                    "SYSTEM_READY motion interlock released by "
+                    f"{source}; normal Nav2/PS2 handoff is now enabled")
+        else:
+            self.motion_serial_enabled = True
+            self.control_mode = "move"
+            self._send_ctrl_frame(
+                CTRL_CMD_MOVE, [0, 0, 0, 0],
+                "SYSTEM_READY_REVOKED_ZERO_HOLD")
+            self.get_logger().warn(
+                f"SYSTEM_NOT_READY motion interlock engaged by {source}")
+        self._publish_control_state()
+        return f"system_ready={str(self.system_ready).lower()}"
+
+    def _on_system_ready(self, msg: Bool):
+        self._set_system_ready(bool(msg.data), "topic")
+
+    def _on_set_system_ready(self, request, response):
+        if bool(request.data) and (
+                self.navi_motion_fault or self.software_estop):
+            response.success = False
+            response.message = (
+                "readiness rejected: emergency stop or NAVI feedback fault "
+                "is active")
+            return response
+        response.message = self._set_system_ready(
+            bool(request.data), "service")
+        response.success = self.system_ready == bool(request.data)
+        if not self.require_system_ready_for_motion:
+            response.success = True
+        return response
 
     def _startup_defaults_tick(self):
         if not self.startup_default_queue:
@@ -1227,6 +1752,13 @@ class ChassisNode(Node):
             "control_mode": self.control_mode,
             "echo_enabled": self.echo_enabled,
             "software_estop": self.software_estop,
+            "navi_motion_fault": self.navi_motion_fault,
+            "navi_motion_fault_reason": self.navi_motion_fault_reason,
+            "navi_motion_watchdog_pose_enabled":
+                self.navi_motion_watchdog_pose_enabled,
+            "system_ready": self.system_ready,
+            "require_system_ready_for_motion":
+                self.require_system_ready_for_motion,
             "mapping_mode": self.mapping_mode,
             "motion_serial_enabled": self.motion_serial_enabled,
             "baseline_ready": self.baseline_ready,
@@ -1270,8 +1802,155 @@ class ChassisNode(Node):
     def _send_ps2_release(self):
         self._send_ctrl_frame(CTRL_CMD_PS2, [0, 0, 0, 0], "WEB_RUNTIME_PS2_RELEASE")
 
+    def _on_nav_status(self, msg: GoalStatusArray):
+        active_states = {
+            GoalStatus.STATUS_ACCEPTED,
+            GoalStatus.STATUS_EXECUTING,
+            GoalStatus.STATUS_CANCELING,
+        }
+        active = any(status.status in active_states for status in msg.status_list)
+        was_active = self.nav_action_active
+        if active:
+            self.nav_action_last_active_time = time.monotonic()
+            if not was_active:
+                self.nav_last_effective_cmd_monotonic = time.monotonic()
+                self.nav_stall_cancel_pending = False
+        elif was_active:
+            self.nav_stall_cancel_pending = False
+        self.nav_action_active = active
+
+    def _on_nav_sensor_health(self, msg: Bool):
+        now = time.monotonic()
+        self.nav_sensor_health_seen = True
+        self.nav_sensor_healthy = bool(msg.data)
+        self.nav_sensor_health_time = now
+        if self.nav_sensor_healthy:
+            self.nav_sensor_fault_since = 0.0
+        elif self.nav_sensor_fault_since <= 0.0:
+            self.nav_sensor_fault_since = now
+
+    def _on_nav_stall_cancel_response(self, future):
+        try:
+            response = future.result()
+            count = len(response.goals_canceling)
+            self.get_logger().warn(
+                "NAV_STALL_CANCEL response "
+                f"return_code={response.return_code} goals_canceling={count}; "
+                "PS2 will be restored when the action becomes idle")
+            if count == 0:
+                self.nav_stall_cancel_pending = False
+        except Exception as exc:
+            self.nav_stall_cancel_pending = False
+            self.get_logger().error(
+                f"NAV_STALL_CANCEL service call failed: {exc}")
+
+    def _cancel_stalled_navigation(
+            self, now: float, reason: str = "") -> bool:
+        if self.nav_stall_cancel_pending:
+            return True
+        if not self.nav_cancel_client.service_is_ready():
+            if now - self.nav_stall_cancel_last_warn_monotonic >= 5.0:
+                self.nav_stall_cancel_last_warn_monotonic = now
+                self.get_logger().error(
+                    "NAV_STALL_CANCEL could not reach "
+                    "/navigate_to_pose/_action/cancel_goal")
+            return False
+
+        request = CancelGoal.Request()
+        self.nav_stall_cancel_pending = True
+        self._send_ctrl_frame(
+            CTRL_CMD_MOVE, [0, 0, 0, 0], "NAV_STALL_CANCEL_ZERO")
+        detail = reason or (
+            "NavigateToPose produced no effective safe velocity for "
+            f"{self.nav_zero_command_cancel_sec:.1f}s"
+        )
+        self.get_logger().error(
+            f"NAV_STALL_CANCEL: {detail}; canceling the goal so control "
+            "can return to PS2")
+        future = self.nav_cancel_client.call_async(request)
+        future.add_done_callback(self._on_nav_stall_cancel_response)
+        return True
+
+    def _auto_nav_ps2_handoff_tick(self):
+        if self.navi_motion_fault:
+            return
+        if self.require_system_ready_for_motion and not self.system_ready:
+            return
+        if self.nav_action_active:
+            now = time.monotonic()
+            self.nav_action_last_active_time = now
+            sensor_healthy_now = (
+                self.nav_sensor_health_seen
+                and self.nav_sensor_healthy
+                and now - self.nav_sensor_health_time
+                <= self.nav_sensor_health_timeout_sec
+            )
+            if sensor_healthy_now:
+                self.nav_sensor_fault_since = 0.0
+            elif self.nav_sensor_fault_since <= 0.0:
+                self.nav_sensor_fault_since = now
+            if (
+                    not sensor_healthy_now
+                    and self.nav_sensor_fault_since > 0.0
+                    and now - self.nav_sensor_fault_since
+                    >= self.nav_sensor_fault_cancel_sec):
+                self._cancel_stalled_navigation(
+                    now,
+                    "required 2D/3D navigation sensor input has been stale "
+                    f"for {now - self.nav_sensor_fault_since:.1f}s",
+                )
+                return
+            if (
+                    now - self.nav_last_effective_cmd_monotonic
+                    >= self.nav_zero_command_cancel_sec):
+                self._cancel_stalled_navigation(now)
+                return
+            if not self.motion_serial_enabled:
+                if self._send_ctrl_frame(
+                        CTRL_CMD_MOVE, [0, 0, 0, 0],
+                        "NAV_ACTION_MOVE_TAKEOVER"):
+                    self.motion_serial_enabled = True
+                    self.control_mode = "move"
+                    self.get_logger().info(
+                        "Nav2 goal active: MOVE takeover enabled")
+                    self._publish_control_state()
+            return
+
+        if not self.motion_serial_enabled:
+            return
+        if (
+            time.monotonic() - self.nav_action_last_active_time
+            < self.nav_ps2_release_delay_sec
+        ):
+            return
+        if self._send_ctrl_frame(
+                CTRL_CMD_PS2, [0, 0, 0, 0],
+                "NAV_IDLE_PS2_RELEASE"):
+            self.motion_serial_enabled = False
+            self.control_mode = "ps2"
+            self.get_logger().info(
+                "Nav2 idle: control returned to PS2")
+            self._publish_control_state()
+
     def _handle_serial_command(self, action: str):
         action = action.strip().lower()
+        if (
+                self.require_system_ready_for_motion
+                and not self.system_ready
+                and action not in ("stop", "estop", "echo_on", "echo_off")):
+            self.get_logger().error(
+                "Motion command blocked until launcher publishes "
+                "/robot/system_ready=true")
+            self._publish_control_state()
+            return
+        if (
+                self.navi_motion_fault
+                and action not in ("stop", "estop", "echo_on", "echo_off")):
+            self.get_logger().error(
+                "Serial motion command blocked by latched "
+                "NAVI_MOTION_FEEDBACK_FAULT; restart required")
+            self._publish_control_state()
+            return
         if action in ("mapping_on", "mapping_off"):
             # Backward compatibility for cached web clients: 0x08 is now a
             # web-only speed profile and must never be written to the STM32.
@@ -1301,7 +1980,11 @@ class ChassisNode(Node):
             self._publish_control_state()
             return
 
-        if action == "ps2" and not self.baseline_ready:
+        if (
+                action == "ps2"
+                and bool(self.get_parameter(
+                    "require_depth_baseline_for_ps2").value)
+                and not self.baseline_ready):
             self._publish_serial_debug({
                 "kind": "control",
                 "action": action,
@@ -1349,9 +2032,31 @@ class ChassisNode(Node):
     # ==================== /cmd_vel 处理 ====================
 
     def cmd_vel_callback(self, msg):
+        if self.nav_action_active and (
+                abs(msg.linear.x) >= 0.02
+                or abs(msg.angular.z) >= 0.04):
+            self.nav_last_effective_cmd_monotonic = time.monotonic()
         self._send_cmd_vel_to_stm32(msg)
 
     def _send_cmd_vel_to_stm32(self, msg):
+        if self.require_system_ready_for_motion and not self.system_ready:
+            now = time.monotonic()
+            if now - self.startup_hold_last_warn_monotonic >= 2.0:
+                self.startup_hold_last_warn_monotonic = now
+                self.get_logger().warn(
+                    "SYSTEM_STARTUP_NOT_READY blocked cmd_vel "
+                    f"linear={msg.linear.x:+.3f} "
+                    f"angular={msg.angular.z:+.3f}; waiting for "
+                    "/robot/set_system_ready")
+            # The STM32 is already in PS2 mode for an idle navigation launch.
+            # Sending a MOVE zero frame here would silently take control away
+            # from the gamepad on every incoming idle Twist.
+            return
+        if self.navi_motion_fault:
+            self._send_ctrl_frame(
+                CTRL_CMD_MOVE, [0, 0, 0, 0],
+                "NAVI_MOTION_FEEDBACK_FAULT_ZERO_HOLD")
+            return
         vx = msg.linear.x
         vz = msg.angular.z
         left_cnt, right_cnt = self._cmd_vel_to_lr_counts(vx, vz)
@@ -1499,8 +2204,30 @@ class ChassisNode(Node):
 
     def destroy_node(self):
         if hasattr(self, 'ser') and self.ser.is_open:
+            if (
+                    self.release_ps2_on_shutdown
+                    and not self.software_estop
+                    and not self.navi_motion_fault):
+                try:
+                    self.ser.write(self._make_ctrl_frame(
+                        CTRL_CMD_MOVE, [0, 0, 0, 0]))
+                    self.ser.flush()
+                    time.sleep(0.03)
+                    self.ser.write(self._make_ctrl_frame(
+                        CTRL_CMD_PS2, [0, 0, 0, 0]))
+                    self.ser.flush()
+                    time.sleep(0.03)
+                    if rclpy.ok():
+                        self.get_logger().info(
+                            "Shutdown: zero speed sent and control returned "
+                            "to PS2")
+                except serial.SerialException as exc:
+                    if rclpy.ok():
+                        self.get_logger().warn(
+                            f"Shutdown PS2 release failed: {exc}")
             self.ser.close()
-            self.get_logger().info("串口已关闭")
+            if rclpy.ok():
+                self.get_logger().info("串口已关闭")
         if getattr(self, 'show_serial_window', False):
             try:
                 import cv2 as cv
@@ -1515,11 +2242,15 @@ def main(args=None):
     node = ChassisNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except Exception:
+        if rclpy.ok():
+            raise
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

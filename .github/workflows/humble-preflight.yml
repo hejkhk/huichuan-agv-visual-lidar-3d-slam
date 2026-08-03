@@ -1,4 +1,4 @@
-name: Jazzy preflight
+name: Humble preflight
 
 on:
   push:
@@ -8,22 +8,22 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-configure:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+  build-and-validate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
     env:
-      ROS_DISTRO: jazzy
-      CAR_JAZZY_BUILD_ROOT: /tmp/huichuan_agv_jazzy_ws
+      ROS_DISTRO: humble
+      CAR_HUMBLE_BUILD_ROOT: /tmp/huichuan_agv_humble_ws
       CAR_VALIDATION_ROS_DOMAIN_ID: "187"
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Install ROS 2 Jazzy
+      - name: Install ROS 2 Humble
         uses: ros-tooling/setup-ros@v0.7
         with:
-          required-ros-distributions: jazzy
+          required-ros-distributions: humble
 
       - name: Install project dependencies
         shell: bash
@@ -38,11 +38,11 @@ jobs:
             python3-yaml
           rosdep update
           rosdep install --from-paths "lidar/chapt1_ws/src" \
-            --ignore-src --rosdistro jazzy -r -y
+            --ignore-src --rosdistro humble -r -y
 
-      - name: Build and configure every Nav2 server
+      - name: Build and validate Humble stack
         shell: bash
-        run: ./validate_auto_mapping_jazzy.sh --build
+        run: ./validate_auto_mapping_humble.sh --build
 
       - name: Build web console
         uses: actions/setup-node@v4

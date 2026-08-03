@@ -7,6 +7,7 @@ import time
 
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, Quaternion
 from nav2_msgs.action import NavigateToPose
@@ -34,6 +35,8 @@ class WebGoalNavNode(Node):
     def __init__(self):
         super().__init__("web_goal_nav_node")
         self.declare_parameter("goal_topic", "/web/nav_goal")
+        self.declare_parameter("rviz_goal_topic", "/goal_pose")
+        self.declare_parameter("bridge_rviz_goal", False)
         self.declare_parameter("robot_pose_topic", "/robot_pose")
         self.declare_parameter("nav_action", "navigate_to_pose")
         self.declare_parameter("force_yaw_to_goal", True)
@@ -68,9 +71,19 @@ class WebGoalNavNode(Node):
         self.goal_sub = self.create_subscription(
             PoseStamped,
             str(self.get_parameter("goal_topic").value),
-            self._on_goal,
+            lambda msg: self._on_goal(msg, "web"),
             10,
         )
+        self.bridge_rviz_goal = bool(
+            self.get_parameter("bridge_rviz_goal").value)
+        self.rviz_goal_sub = None
+        if self.bridge_rviz_goal:
+            self.rviz_goal_sub = self.create_subscription(
+                PoseStamped,
+                str(self.get_parameter("rviz_goal_topic").value),
+                lambda msg: self._on_goal(msg, "rviz"),
+                10,
+            )
         self.pose_sub = self.create_subscription(
             PoseStamped,
             str(self.get_parameter("robot_pose_topic").value),
@@ -96,7 +109,10 @@ class WebGoalNavNode(Node):
             10,
         )
         self.create_timer(0.1, self._on_pause_wait_timer)
-        self.get_logger().info("Web goal Nav2 action bridge started")
+        accepted_sources = "web and RViz" if self.bridge_rviz_goal else "web only"
+        self.get_logger().info(
+            f"Nav2 goal bridge started: {accepted_sources}; "
+            "RViz uses the native Nav2 action when bridging is disabled")
 
     def _on_pose(self, msg: PoseStamped):
         self.last_pose = msg.pose
@@ -159,10 +175,10 @@ class WebGoalNavNode(Node):
             self._try_send_pending_goal(sequence)
 
         if self.pending_goal is not None:
-            pending_sequence, _goal = self.pending_goal
+            pending_sequence, _goal, _source = self.pending_goal
             self._try_send_pending_goal(pending_sequence)
 
-    def _on_goal(self, msg: PoseStamped):
+    def _on_goal(self, msg: PoseStamped, source: str = "web"):
         goal = PoseStamped()
         goal.header = msg.header
         goal.pose = msg.pose
@@ -180,7 +196,7 @@ class WebGoalNavNode(Node):
 
         self.goal_sequence += 1
         sequence = self.goal_sequence
-        self.pending_goal = (sequence, goal)
+        self.pending_goal = (sequence, goal, source)
         self.cancel_ready_sequence = 0
         self.pause_ready_sequence = 0
         self.pause_wait_sequence = 0
@@ -228,7 +244,7 @@ class WebGoalNavNode(Node):
             return
         if self.cancel_ready_sequence != sequence or self.pause_ready_sequence != sequence:
             return
-        pending_sequence, goal = self.pending_goal
+        pending_sequence, goal, source = self.pending_goal
         if pending_sequence != sequence:
             return
 
@@ -251,8 +267,13 @@ class WebGoalNavNode(Node):
             action_goal.behavior_tree = ""
 
         self.get_logger().info(
-            "Sending web nav goal: x=%.2f y=%.2f frame=%s"
-            % (goal.pose.position.x, goal.pose.position.y, goal.header.frame_id)
+            "Sending %s nav goal: x=%.2f y=%.2f frame=%s"
+            % (
+                source,
+                goal.pose.position.x,
+                goal.pose.position.y,
+                goal.header.frame_id,
+            )
         )
         self.goal_request_in_flight = True
         future = self.client.send_goal_async(action_goal)
@@ -314,7 +335,7 @@ class WebGoalNavNode(Node):
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(
             lambda done, seq=sequence: self._on_result(done, seq))
-        self.get_logger().info("Web nav goal accepted")
+        self.get_logger().info("Nav goal accepted")
 
     def _on_stale_goal_cancelled(self, _future):
         self.goal_request_in_flight = False
@@ -336,11 +357,16 @@ def main(args=None):
     node = WebGoalNavNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except Exception:
+        # Jazzy can invalidate the shared launch context before spin returns.
+        if rclpy.ok():
+            raise
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 import math
 
 from lidar_py.fusion_control import (
+    AdaptiveArcGain,
+    ArcGainConfig,
     DepthSample,
     FusionConfig,
     FusionController,
@@ -26,6 +28,30 @@ def test_stopped_nav_does_not_receive_vision_rotation():
     result = controller.update(0.0, 0.0, sample, now=1.0, dt=0.05)
     assert result.linear_x == 0.0
     assert result.angular_z == 0.0
+
+
+def test_nav_can_disable_competing_vision_steering():
+    controller = FusionController()
+    sample = DepthSample(
+        level=1,
+        center_far=True,
+        nearest_mm=700,
+        preferred_dir=-1,
+    )
+    result = controller.update(
+        0.15,
+        0.04,
+        sample,
+        now=1.0,
+        dt=0.05,
+        allow_steering_bias=False,
+    )
+    assert 0.0 < result.linear_x < 0.15
+    assert math.isclose(
+        result.angular_z / result.linear_x,
+        0.04 / 0.15,
+        rel_tol=1.0e-6,
+    )
 
 
 def test_nav_recovery_spin_is_not_reversed_by_vision():
@@ -80,3 +106,20 @@ def test_virtual_scan_marks_center_and_sides():
     assert math.isclose(ranges[30], 0.68)
     assert any(math.isclose(value, 0.68) for value in ranges[40:])
     assert math.isinf(ranges[0])
+
+
+def test_arc_gain_increases_when_real_radius_is_too_large():
+    estimator = AdaptiveArcGain(ArcGainConfig(initial_gain=1.40))
+    before = estimator.gain
+    after = estimator.observe(
+        desired_v=0.14,
+        desired_w=0.14,
+        measured_v=0.14,
+        measured_w=0.08,
+    )
+    assert after > before
+
+
+def test_arc_gain_ignores_stationary_noise():
+    estimator = AdaptiveArcGain(ArcGainConfig(initial_gain=1.40))
+    assert estimator.observe(0.14, 0.14, 0.0, 0.01) == 1.40

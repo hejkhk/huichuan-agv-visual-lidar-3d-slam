@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash
 ENV_FILE="$ROOT_DIR/visual_laser_slam/visual_laser_slam.env"
 [ -f "$ENV_FILE" ] && source "$ENV_FILE"
 if [ -n "${ORBBEC_SETUP:-}" ] && [ -f "$ORBBEC_SETUP" ]; then source "$ORBBEC_SETUP"; fi

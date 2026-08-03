@@ -184,7 +184,7 @@ The TurtleBot3 Waffle Pi is also a relatively small and slow robot, so parameter
 
 ## Design Goals
 
-- Provide a C++ exploration package that is fast, predictable, and easy to integrate into real robotics systems, with a verified ROS 2 Jazzy path.
+- Provide a C++ exploration package that is fast, predictable, and easy to integrate into real robotics systems, with the ROS 2 Humble path used by this project.
 - Keep WFD-style frontier extraction while improving frontier quality and exploration ordering through pre-WFD map optimization and MRTSP-based selection.
 - Use a single MRTSP-style global ordering path with predictable dispatch semantics.
 - Improve **MRTSP route quality** with **bounded-horizon Dynamic Programming** while keeping target selection lightweight for repeated replanning.

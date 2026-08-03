@@ -278,7 +278,7 @@ class Ros2TopicCameraManager:
     def start(self) -> bool:
         if not ROS2_AVAILABLE:
             print(f"❌ ROS2 Python 依赖不可用：{ROS2_IMPORT_ERROR}")
-            print("   请用系统 Python3，并安装 ros-jazzy-rclpy / ros-jazzy-sensor-msgs。")
+            print("   请用系统 Python3，并安装 ros-humble-rclpy / ros-humble-sensor-msgs。")
             return False
         try:
             try:

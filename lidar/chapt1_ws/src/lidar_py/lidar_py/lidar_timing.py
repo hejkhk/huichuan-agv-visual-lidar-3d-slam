@@ -1,7 +1,8 @@
 """Timing helpers for LDROBOT LiDAR packet clocks."""
 
 from dataclasses import dataclass
-from typing import Optional
+from collections import deque
+from typing import Deque, Optional
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,56 @@ class MonotonicMinimumDelayMapper:
             self.total_adjustment_ns += adjustment
 
         mapped_ns = self.offset_ns + device_ns
+        if self.last_mapped_ns is not None and mapped_ns <= self.last_mapped_ns:
+            mapped_ns = self.last_mapped_ns + 1
+        self.last_mapped_ns = mapped_ns
+        return mapped_ns
+
+
+class AdaptiveMinimumDelayMapper:
+    """Map a device tick to host time while tracking slow oscillator drift.
+
+    Receipt timestamps contain non-negative scheduling and serial delay.  The
+    minimum offset in a recent window is therefore a robust clock-offset
+    estimate.  Slew limiting lets that estimate move in either direction
+    without making ROS timestamps jump when the MCU and host oscillators drift.
+    """
+
+    def __init__(self, window_size: int = 250, max_adjustment_ns: int = 20_000):
+        if window_size < 2:
+            raise ValueError("window_size must be at least 2")
+        if max_adjustment_ns <= 0:
+            raise ValueError("max_adjustment_ns must be positive")
+        self.window_size = int(window_size)
+        self.max_adjustment_ns = int(max_adjustment_ns)
+        self.candidates: Deque[int] = deque(maxlen=self.window_size)
+        self.offset_ns: Optional[int] = None
+        self.last_mapped_ns: Optional[int] = None
+
+    def reset(self) -> None:
+        self.candidates.clear()
+        self.offset_ns = None
+        self.last_mapped_ns = None
+
+    def map_ms(self, device_ms: int, receipt_ns: int, wire_ns: int = 0) -> int:
+        device_ns = int(device_ms) * 1_000_000
+        candidate = int(receipt_ns) - device_ns - int(wire_ns)
+        self.candidates.append(candidate)
+        target = min(self.candidates)
+
+        if self.offset_ns is None:
+            self.offset_ns = target
+        else:
+            error = target - self.offset_ns
+            adjustment = max(
+                -self.max_adjustment_ns,
+                min(self.max_adjustment_ns, error),
+            )
+            self.offset_ns += adjustment
+
+        mapped_ns = self.offset_ns + device_ns
+        # The sample cannot be newer than the end of its serial transmission.
+        mapped_ns = min(mapped_ns, int(receipt_ns) - int(wire_ns))
         if self.last_mapped_ns is not None and mapped_ns <= self.last_mapped_ns:
             mapped_ns = self.last_mapped_ns + 1
         self.last_mapped_ns = mapped_ns

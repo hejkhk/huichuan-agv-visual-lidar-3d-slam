@@ -97,8 +97,8 @@ chmod +x STEP*.sh SAVE_STEP9_OCTOMAP.sh RESET_STEP9_OCTOMAP.sh
 它会额外安装：
 
 ```text
-ros-jazzy-octomap-server
-ros-jazzy-octomap-msgs
+ros-humble-octomap-server
+ros-humble-octomap-msgs
 ```
 
 ### 3.3 把已验证成功的相机外参填回来

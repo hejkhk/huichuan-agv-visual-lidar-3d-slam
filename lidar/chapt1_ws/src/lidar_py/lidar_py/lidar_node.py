@@ -1,4 +1,5 @@
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from rclpy.time import Time
@@ -116,11 +117,14 @@ class LidarNode(Node):
         self.declare_parameter('fixed_timed_scan_topic', '/scan_timed_v2')
         self.declare_parameter('fixed_scan_bins', 360)
         self.declare_parameter('fixed_scan_min_raw_points', 300)
-        self.declare_parameter('fixed_scan_max_raw_points', 480)
+        # The LD14P point count rises as motor speed falls. The real unit can
+        # produce about 630 rays over a valid 0.27 s revolution.
+        self.declare_parameter('fixed_scan_max_raw_points', 720)
         self.declare_parameter('fixed_scan_min_valid_points', 0)
         self.declare_parameter('fixed_scan_min_time_sec', 0.10)
-        self.declare_parameter('fixed_scan_max_time_sec', 0.25)
+        self.declare_parameter('fixed_scan_max_time_sec', 0.35)
         self.declare_parameter('clock_max_adjustment_ns', 100000)
+        self.declare_parameter('serial_stall_timeout_sec', 1.0)
 
         serial_port = self.get_parameter('serial_port').value
         baudrate = self.get_parameter('baudrate').value
@@ -141,6 +145,8 @@ class LidarNode(Node):
             self.get_parameter('fixed_timed_scan_topic').value)
         clock_max_adjustment_ns = int(
             self.get_parameter('clock_max_adjustment_ns').value)
+        self.serial_stall_timeout_sec = max(
+            0.5, float(self.get_parameter('serial_stall_timeout_sec').value))
 
         # ===== Open serial port with retry =====
         self.ser = None
@@ -157,14 +163,20 @@ class LidarNode(Node):
             depth=10
         )
         self.scan_pub = self.create_publisher(LaserScan, scan_topic, qos)
+        sensor_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=5,
+        )
         self.timed_scan_pub = None
         if self.publish_timed_scan:
-            self.timed_scan_pub = self.create_publisher(LaserScan, timed_scan_topic, qos)
+            self.timed_scan_pub = self.create_publisher(
+                LaserScan, timed_scan_topic, sensor_qos)
         self.fixed_timed_scan_pub = None
         self.fixed_scan_builder = None
         if self.publish_fixed_timed_scan:
             self.fixed_timed_scan_pub = self.create_publisher(
-                LaserScan, fixed_timed_scan_topic, qos)
+                LaserScan, fixed_timed_scan_topic, sensor_qos)
             self.fixed_scan_builder = FixedScanGridBuilder(
                 bins=int(self.get_parameter('fixed_scan_bins').value),
                 angle_sign=self.scan_angle_sign,
@@ -213,6 +225,8 @@ class LidarNode(Node):
         self.crc_ok_count = 0
         self.invalid_point_count = 0
         self.zero_distance_count = 0
+        self.last_valid_frame_monotonic = time.monotonic()
+        self.serial_reconnect_count = 0
 
 
         # ===== Static TF: base_link -> laser_frame =====
@@ -259,18 +273,24 @@ class LidarNode(Node):
             f"{self.scan_angle_offset_deg:+.1f}) mod 360"
         )
 
-    def _connect_serial(self):
+    def _connect_serial(self, attempts=10):
         """Open serial port with retry logic."""
         import time as _time
-        for attempt in range(10):
+        for attempt in range(attempts):
             try:
                 self.ser = serial.Serial(self.serial_port, self.baudrate, timeout=0.1)
+                self.ser.reset_input_buffer()
+                if hasattr(self, 'buffer'):
+                    self.buffer.clear()
+                self.last_valid_frame_monotonic = time.monotonic()
                 self.get_logger().info(f"Serial port {self.serial_port} opened at {self.baudrate} baud")
                 return
             except serial.SerialException as e:
-                self.get_logger().warn(f"Serial port attempt {attempt+1}/10 failed: {e}")
+                self.get_logger().warn(
+                    f"Serial port attempt {attempt+1}/{attempts} failed: {e}")
                 _time.sleep(1.0)
-        self.get_logger().error(f"Failed to open serial port {self.serial_port} after 10 attempts")
+        self.get_logger().error(
+            f"Failed to open serial port {self.serial_port} after {attempts} attempts")
         # Create a dummy serial to avoid crashes - node will run without data
         self.ser = serial.Serial.__new__(serial.Serial)
         self.ser.is_open = False
@@ -279,16 +299,49 @@ class LidarNode(Node):
         """Read data from serial buffer and parse frames."""
         if not self.ser.is_open:
             # Try to reconnect
-            self._connect_serial()
+            self._connect_serial(attempts=1)
             return
 
-        in_waiting = self.ser.in_waiting
-
-        if in_waiting > 0:
-            data = self.ser.read(in_waiting)
-            self.buffer.extend(data)
+        try:
+            in_waiting = self.ser.in_waiting
+            if in_waiting > 0:
+                data = self.ser.read(in_waiting)
+                self.buffer.extend(data)
+        except (serial.SerialException, OSError) as exc:
+            self.get_logger().error(f"LiDAR serial read failed: {exc}")
+            self._restart_serial_stream("read error")
+            return
 
         self._parse_buffer()
+        if (time.monotonic() - self.last_valid_frame_monotonic
+                > self.serial_stall_timeout_sec):
+            self._restart_serial_stream(
+                f"no valid packet for {self.serial_stall_timeout_sec:.1f}s")
+
+    def _restart_serial_stream(self, reason):
+        """Reopen a stalled USB serial stream and restart device time mapping."""
+        self.serial_reconnect_count += 1
+        self.get_logger().error(
+            f"LiDAR stream stalled ({reason}); reopening {self.serial_port} "
+            f"(count={self.serial_reconnect_count})")
+        try:
+            if self.ser is not None and self.ser.is_open:
+                self.ser.close()
+        except (serial.SerialException, OSError):
+            pass
+        self.buffer.clear()
+        self.scan_points.clear()
+        self.timed_scan_points.clear()
+        self.prev_start_angle = None
+        self.have_full_scan_start = False
+        self.scan_start_time = None
+        self.scan_start_device_ms = None
+        self.completed_device_scan_time = None
+        self.device_clock = WrappingMillisecondClock(
+            modulus=30000, max_step_ms=2000)
+        self.device_time_mapper.reset()
+        self.last_valid_frame_monotonic = time.monotonic()
+        self._connect_serial(attempts=1)
 
     def _parse_buffer(self):
         """Parse complete frames from the buffer using CRC validation."""
@@ -325,6 +378,7 @@ class LidarNode(Node):
 
     def _process_frame(self, frame):
         """Process a single 47-byte frame according to LD14P protocol."""
+        self.last_valid_frame_monotonic = time.monotonic()
         self.frame_count += 1
         self.crc_ok_count += 1
 
@@ -675,7 +729,8 @@ class LidarNode(Node):
         """Clean up serial port on shutdown."""
         if hasattr(self, 'ser') and self.ser.is_open:
             self.ser.close()
-            self.get_logger().info("Serial port closed")
+            if rclpy.ok():
+                self.get_logger().info("Serial port closed")
         super().destroy_node()
 
 
@@ -685,11 +740,16 @@ def main(args=None):
     node = LidarNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except Exception:
+        # Jazzy may invalidate the shared launch context before spin() wakes.
+        if rclpy.ok():
+            raise
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

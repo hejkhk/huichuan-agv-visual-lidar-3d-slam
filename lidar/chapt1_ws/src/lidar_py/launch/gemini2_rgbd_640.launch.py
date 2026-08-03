@@ -54,6 +54,7 @@ def generate_launch_description():
         DeclareLaunchArgument("align_mode", default_value="HW"),
         DeclareLaunchArgument("align_target_stream", default_value="COLOR"),
         DeclareLaunchArgument("enable_depth_scale", default_value="true"),
+        DeclareLaunchArgument("enable_depth_auto_exposure_priority", default_value="false"),
 
         # -------- 先关掉重负载内容 --------
         DeclareLaunchArgument("enable_point_cloud", default_value="false"),
@@ -67,6 +68,11 @@ def generate_launch_description():
 
         # -------- 同步与 TF --------
         DeclareLaunchArgument("enable_frame_sync", default_value="true"),
+        DeclareLaunchArgument("enable_sync_host_time", default_value="true"),
+        DeclareLaunchArgument("time_domain", default_value="device"),
+        DeclareLaunchArgument("time_sync_period", default_value="60.0"),
+        DeclareLaunchArgument("enable_frame_timestamp_csv", default_value="false"),
+        DeclareLaunchArgument("frame_timestamp_csv_file", default_value="/tmp/orbbec_frame_timestamp.csv"),
         DeclareLaunchArgument("publish_tf", default_value="true"),
         DeclareLaunchArgument("tf_publish_rate", default_value="0.0"),
         DeclareLaunchArgument("camera__frame_id", default_value="camera_link"),
@@ -116,6 +122,9 @@ def generate_launch_description():
         "align_mode": LaunchConfiguration("align_mode"),
         "align_target_stream": LaunchConfiguration("align_target_stream"),
         "enable_depth_scale": LaunchConfiguration("enable_depth_scale"),
+        "enable_depth_auto_exposure_priority": LaunchConfiguration(
+            "enable_depth_auto_exposure_priority"
+        ),
 
         "enable_point_cloud": LaunchConfiguration("enable_point_cloud"),
         "enable_colored_point_cloud": LaunchConfiguration("enable_colored_point_cloud"),
@@ -127,6 +136,15 @@ def generate_launch_description():
         "enable_sync_output_accel_gyro": LaunchConfiguration("enable_sync_output_accel_gyro"),
 
         "enable_frame_sync": LaunchConfiguration("enable_frame_sync"),
+        "enable_sync_host_time": LaunchConfiguration("enable_sync_host_time"),
+        "time_domain": LaunchConfiguration("time_domain"),
+        "time_sync_period": LaunchConfiguration("time_sync_period"),
+        "enable_frame_timestamp_csv": LaunchConfiguration(
+            "enable_frame_timestamp_csv"
+        ),
+        "frame_timestamp_csv_file": LaunchConfiguration(
+            "frame_timestamp_csv_file"
+        ),
         "publish_tf": LaunchConfiguration("publish_tf"),
         "tf_publish_rate": LaunchConfiguration("tf_publish_rate"),
         "camera__frame_id": LaunchConfiguration("camera__frame_id"),

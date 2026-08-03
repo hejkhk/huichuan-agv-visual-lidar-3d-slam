@@ -16,14 +16,14 @@
 ## 先跑 ROS2 相机
 
 ```bash
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash
 ros2 launch orbbec_camera gemini2_rgbd_1280_full_test.launch.py
 ```
 
 另开终端：
 
 ```bash
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash
 cd road_v5_5_640_modular_v7_unified_io
 python3 main.py
 ```

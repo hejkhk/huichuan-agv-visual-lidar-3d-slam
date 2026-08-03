@@ -5,23 +5,23 @@ echo "=========================================="
 echo "  Raspberry Pi ROS2 RGB-D Bridge 依赖安装"
 echo "=========================================="
 
-if [ ! -d "/opt/ros/jazzy" ]; then
-    echo "❌ 没找到 /opt/ros/jazzy"
-    echo "如果你不是 Jazzy，请把脚本里的 jazzy 改成你的 ROS2 版本。"
+if [ ! -d "/opt/ros/humble" ]; then
+    echo "❌ 没找到 /opt/ros/humble"
+    echo "请先在 Ubuntu 22.04 安装 ROS 2 Humble。"
     exit 1
 fi
 
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash
 sudo apt update
 sudo apt install -y \
-    ros-jazzy-rclpy \
-    ros-jazzy-sensor-msgs \
-    ros-jazzy-std-msgs \
-    ros-jazzy-image-transport \
-    ros-jazzy-compressed-image-transport \
-    ros-jazzy-camera-info-manager \
-    ros-jazzy-rqt-image-view \
-    ros-jazzy-image-tools \
+    ros-humble-rclpy \
+    ros-humble-sensor-msgs \
+    ros-humble-std-msgs \
+    ros-humble-image-transport \
+    ros-humble-compressed-image-transport \
+    ros-humble-camera-info-manager \
+    ros-humble-rqt-image-view \
+    ros-humble-image-tools \
     python3-pip \
     python3-numpy \
     python3-opencv \
@@ -31,10 +31,10 @@ sudo apt install -y \
     unzip git htop \
     libgl1 libglib2.0-0 libgtk-3-0
 
-if ! grep -q "source /opt/ros/jazzy/setup.bash" ~/.bashrc; then
-    echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+if ! grep -q "source /opt/ros/humble/setup.bash" ~/.bashrc; then
+    echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
 fi
 
 echo "✅ 完成。测试："
-echo "source /opt/ros/jazzy/setup.bash"
+echo "source /opt/ros/humble/setup.bash"
 echo "python3 -c \"import rclpy, cv2, numpy; from sensor_msgs.msg import Image; print('OK')\""

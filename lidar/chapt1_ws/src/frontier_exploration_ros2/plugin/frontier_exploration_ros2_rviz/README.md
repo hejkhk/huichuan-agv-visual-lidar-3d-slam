@@ -26,7 +26,7 @@ Build the core package first in the normal workspace flow, then build the RViz p
 explicitly from its nested `plugin/` base path:
 
 ```bash
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash
 cd ~/your_ros2_ws
 colcon build --packages-select frontier_exploration_ros2
 colcon build \

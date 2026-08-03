@@ -1,174 +1,62 @@
-
-<!--
-  Compute one initial path, optionally pre-rotate once, then follow it. While moving,
-  retain a valid path and only replan when it becomes invalid or the goal changes.
--->
+<!-- Differential-drive navigation with bounded, collision-aware recovery. -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
-      <SequenceWithMemory name="NavigateWithInitialPreRotate">
-        <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
-        <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
-        <RecoveryNode number_of_retries="1" name="ComputeInitialPathToPose">
-          <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
-          <Sequence>
+    <PipelineSequence name="NavigateWithStableReplanning">
+      <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
+      <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
+
+      <!-- Nav2's normal pipeline replans at 1 Hz. A collision-free path is
+           retained for three seconds to avoid nearly identical routes
+           alternating at a doorway. There is no behavior-server Wait action:
+           planner retries can no longer consume the whole navigation task. -->
+      <RateController hz="1.0">
+        <Fallback name="KeepOrComputeCollisionCheckedPath">
+          <ReactiveSequence name="KeepFreshValidPath">
+            <Inverter>
+              <PathExpiringTimer seconds="3.0" path="{path}"/>
+            </Inverter>
+            <Inverter>
+              <GlobalUpdatedGoal/>
+            </Inverter>
+            <IsPathValid path="{path}"/>
+          </ReactiveSequence>
+
+          <!-- Retry a transient planner error twice without moving, clearing
+               costmaps, or starting a recovery behavior. -->
+          <RecoveryNode number_of_retries="2" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
             <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
-            <ClearEntireCostmap name="ClearGlobalCostmap-Initial" service_name="global_costmap/clear_entirely_global_costmap"/>
-          </Sequence>
-        </RecoveryNode>
-        <!-- Evaluate exactly once per new goal, after the first global path exists. -->
-        <Fallback name="PreRotateAtGoalStart">
-          <Inverter>
-            <InitialPathPreRotate goal="{goal}"
-                                  path="{path}"
-                                  min_short_distance="0.30"
-                                  max_short_distance="1.20"
-                                  min_short_bearing="2.09439510239"
-                                  min_path_length="1.20"
-                                  circle_radius="0.50911688245"
-                                  min_path_bearing="0.20"
-                                  robot_base_frame="base_link"
-                                  spin_dist="{initial_spin_dist}"/>
-          </Inverter>
-          <Fallback name="SafeSpinOrNoShimDWB">
-            <Sequence name="PreRotateOnlyWhenFullSweepIsClear">
-              <SpinSafetyCheck safety_radius="0.54"
-                               lethal_cost="254"
-                               block_unknown="true"
-                               robot_base_frame="base_link"
-                               costmap_wait_timeout="1.0"/>
-              <Spin spin_dist="{initial_spin_dist}"
-                    time_allowance="12.0"
-                    is_recovery="false"
-                    error_code_id="{spin_error_code}"/>
-            </Sequence>
-            <SelectController controller_id="FollowPathNoShim"
-                              selected_controller="{selected_controller}"/>
-          </Fallback>
-        </Fallback>
-        <!-- When the collision-safe fallback DWB actually backs out, stop it as soon
-             as reverse motion finishes, recompute from the new pose, and reuse the
-             same short/long initial path alignment logic before normal tracking. -->
-        <Fallback name="OptionalPostReverseRealignment">
-          <Inverter>
-            <ControllerSelected selected_controller="{selected_controller}"
-                                expected_controller="FollowPathNoShim"/>
-          </Inverter>
-          <Sequence name="EscapeThenRealign">
-            <Parallel success_count="1" failure_count="1">
-              <ReverseEscapeMonitor cmd_vel_topic="/cmd_vel_nav"
-                                    reverse_velocity_threshold="0.01"
-                                    stopped_velocity_threshold="0.005"
-                                    min_reverse_duration="0.30"
-                                    min_reverse_distance="0.08"
-                                    nonreverse_hold_time="0.20"
-                                    reverse_start_window="1.0"
-                                    fixed_frame="odom"
-                                    robot_base_frame="base_link"
-                                    completed="{reverse_escape_completed}"/>
-              <FollowPath path="{path}"
-                          controller_id="{selected_controller}"
-                          error_code_id="{follow_path_error_code}"/>
-            </Parallel>
-            <Fallback name="GoalReachedOrRealignAfterReverse">
-              <GoalReached goal="{goal}"
-                           global_frame="map"
-                           robot_base_frame="base_link"/>
-              <Sequence name="RealignAfterReverse">
-                <ReverseEscapeCompleted completed="{reverse_escape_completed}"/>
-                <RecoveryNode number_of_retries="1" name="ComputePostReversePath">
-                  <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
-                  <Sequence>
-                    <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
-                    <ClearEntireCostmap name="ClearGlobalCostmap-PostReverse" service_name="global_costmap/clear_entirely_global_costmap"/>
-                  </Sequence>
-                </RecoveryNode>
-                <Fallback name="PostReverseAlignmentDecision">
-                  <Sequence name="PostReverseAlignmentNeeded">
-                    <InitialPathPreRotate goal="{goal}"
-                                          path="{path}"
-                                          min_short_distance="0.30"
-                                          max_short_distance="1.20"
-                                          min_short_bearing="2.09439510239"
-                                          min_path_length="1.20"
-                                          circle_radius="0.50911688245"
-                                          min_path_bearing="0.20"
-                                          robot_base_frame="base_link"
-                                          spin_dist="{post_reverse_spin_dist}"/>
-                    <Fallback name="SafePostReverseSpinOrNoShim">
-                      <Sequence name="SafePostReverseSpin">
-                        <SpinSafetyCheck safety_radius="0.54"
-                                         lethal_cost="254"
-                                         block_unknown="true"
-                                         robot_base_frame="base_link"
-                                         costmap_wait_timeout="1.0"/>
-                        <Spin spin_dist="{post_reverse_spin_dist}"
-                              time_allowance="12.0"
-                              is_recovery="false"
-                              error_code_id="{spin_error_code}"/>
-                        <SelectController controller_id="FollowPath"
-                                          selected_controller="{selected_controller}"/>
-                      </Sequence>
-                      <SelectController controller_id="FollowPathNoShim"
-                                        selected_controller="{selected_controller}"/>
-                    </Fallback>
-                  </Sequence>
-                  <SelectController controller_id="FollowPath"
-                                    selected_controller="{selected_controller}"/>
-                </Fallback>
-              </Sequence>
-            </Fallback>
-          </Sequence>
-        </Fallback>
-        <Fallback name="GoalReachedOrTrackPath">
-          <GoalReached goal="{goal}"
-                       global_frame="map"
-                       robot_base_frame="base_link"/>
-          <PipelineSequence name="TrackWithValidPathReplanning">
-          <RateController hz="0.2">
-            <RecoveryNode number_of_retries="1" name="ComputePathIfInvalid">
-              <Fallback name="KeepExistingValidPath">
-                <ReactiveSequence>
-                  <Inverter>
-                    <GlobalUpdatedGoal/>
-                  </Inverter>
-                  <IsPathValid path="{path}"/>
-                </ReactiveSequence>
-                <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
-              </Fallback>
-              <Sequence>
-                <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
-                <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
-              </Sequence>
-            </RecoveryNode>
-          </RateController>
-          <RecoveryNode number_of_retries="1" name="FollowPath">
-            <FollowPath path="{path}" controller_id="{selected_controller}" error_code_id="{follow_path_error_code}"/>
-            <Sequence>
-              <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
-              <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
-            </Sequence>
           </RecoveryNode>
-          </PipelineSequence>
+
+          <!-- A failed refresh may keep the previous path only when it is
+               still collision-valid and the goal has not changed. -->
+          <ReactiveSequence name="RetainValidPathAfterTransientPlannerFailure">
+            <Inverter>
+              <GlobalUpdatedGoal/>
+            </Inverter>
+            <IsPathValid path="{path}"/>
+          </ReactiveSequence>
         </Fallback>
-      </SequenceWithMemory>
-      <Sequence>
-        <Fallback>
+      </RateController>
+
+      <!-- Physical escape is reserved for a real controller failure on a path
+           that is still valid. Two short actions replace the old unbounded
+           reverse/wait/spin loop. Nav2's BackUp and Spin actions perform their
+           own footprint collision checks. -->
+      <RecoveryNode number_of_retries="2" name="FollowPath">
+        <FollowPath path="{path}" controller_id="{selected_controller}" error_code_id="{follow_path_error_code}"/>
+        <Sequence name="BoundedControllerRecovery">
           <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
-          <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
-        </Fallback>
-        <ReactiveFallback name="RecoveryFallback">
-          <GoalUpdated/>
-          <RoundRobin name="RecoveryActions">
-            <Sequence name="ClearingActions">
-              <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
-              <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+          <IsPathValid path="{path}"/>
+          <RoundRobin name="SafeEscapeActions">
+            <BackUp name="ShortBackUp" backup_dist="0.16" backup_speed="0.05" time_allowance="5.0" error_code_id="{backup_error_code}"/>
+            <Sequence name="BackOutThenSmallTurn">
+              <BackUp name="BackUpBeforeTurn" backup_dist="0.12" backup_speed="0.05" time_allowance="5.0" error_code_id="{backup_error_code}"/>
+              <Spin name="SmallEscapeTurn" spin_dist="0.20" time_allowance="6.0" error_code_id="{spin_error_code}"/>
             </Sequence>
-            <Spin spin_dist="1.57" error_code_id="{spin_error_code}"/>
-            <Wait wait_duration="5.0"/>
           </RoundRobin>
-        </ReactiveFallback>
-      </Sequence>
-    </RecoveryNode>
+        </Sequence>
+      </RecoveryNode>
+    </PipelineSequence>
   </BehaviorTree>
 </root>

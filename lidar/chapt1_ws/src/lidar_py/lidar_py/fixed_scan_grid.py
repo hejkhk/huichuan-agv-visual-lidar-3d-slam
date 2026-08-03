@@ -41,10 +41,10 @@ class FixedScanGridBuilder:
             angle_sign: float = -1.0,
             angle_offset_deg: float = 0.0,
             min_raw_points: int = 300,
-            max_raw_points: int = 480,
+            max_raw_points: int = 720,
             min_valid_points: int = 0,
             min_scan_time: float = 0.10,
-            max_scan_time: float = 0.25,
+            max_scan_time: float = 0.35,
             max_bin_error_deg: Optional[float] = None):
         if bins < 10:
             raise ValueError("bins must be at least 10")

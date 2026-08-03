@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Keep the existing web API while using the native Jazzy frontier service."""
+"""Keep the existing web API while using the native Humble frontier service."""
 
 import json
 import time
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from action_msgs.msg import GoalStatus
 from action_msgs.msg import GoalStatusArray
 from frontier_exploration_ros2.srv import ControlExploration
@@ -31,8 +32,8 @@ class FrontierWebBridge(Node):
         self.completed = False
         self.state = "running" if self.enabled else "disabled"
         self.message = (
-            "Jazzy frontier autostart is active" if self.enabled
-            else "Jazzy frontier is idle")
+            "Humble frontier autostart is active" if self.enabled
+            else "Humble frontier is idle")
         self.request_in_flight = False
         self.pending_enable = None
         self.stop_started_at = 0.0
@@ -71,7 +72,7 @@ class FrontierWebBridge(Node):
         self.create_timer(0.5, self._on_timer)
         self._publish_status()
         self.get_logger().info(
-            "Web auto-mapping bridge ready for native Jazzy frontier service")
+            "Web auto-mapping bridge ready for native Humble frontier service")
 
     def _on_web_control(self, msg: String):
         try:
@@ -216,11 +217,16 @@ def main(args=None):
     node = FrontierWebBridge()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except Exception:
+            if rclpy.ok():
+                raise
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

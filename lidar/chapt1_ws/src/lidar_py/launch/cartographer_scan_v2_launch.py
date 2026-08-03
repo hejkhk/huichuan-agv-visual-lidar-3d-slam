@@ -20,6 +20,9 @@ def generate_launch_description():
     use_rviz = LaunchConfiguration("use_rviz")
     lidar_serial_port = LaunchConfiguration("lidar_serial_port")
     lidar_baudrate = LaunchConfiguration("lidar_baudrate")
+    laser_x = LaunchConfiguration("laser_x")
+    laser_y = LaunchConfiguration("laser_y")
+    laser_z = LaunchConfiguration("laser_z")
     chassis_serial_port = LaunchConfiguration("chassis_serial_port")
     laser_yaw_deg = LaunchConfiguration("laser_yaw_deg")
     scan_angle_sign = LaunchConfiguration("scan_angle_sign")
@@ -28,6 +31,8 @@ def generate_launch_description():
     navi_vz_sign = LaunchConfiguration("navi_vz_sign")
     navi_yaw_offset_deg = LaunchConfiguration("navi_yaw_offset_deg")
     navi_odom_yaw_source = LaunchConfiguration("navi_odom_yaw_source")
+    navi_max_yaw_rate_deg_s = LaunchConfiguration(
+        "navi_max_yaw_rate_deg_s")
     cartographer_config = LaunchConfiguration("cartographer_config")
     cartographer_scan_topic = LaunchConfiguration("cartographer_scan_topic")
     fixed_scan_bins = LaunchConfiguration("fixed_scan_bins")
@@ -40,7 +45,34 @@ def generate_launch_description():
     navi_turn_vx_scale = LaunchConfiguration("navi_turn_vx_scale")
     navi_turn_wz_threshold_rad_s = LaunchConfiguration(
         "navi_turn_wz_threshold_rad_s")
+    navi_adaptive_clock_sync = LaunchConfiguration(
+        "navi_adaptive_clock_sync")
+    navi_clock_window_samples = LaunchConfiguration(
+        "navi_clock_window_samples")
+    navi_clock_max_adjustment_ns = LaunchConfiguration(
+        "navi_clock_max_adjustment_ns")
+    navi_motion_watchdog_enabled = LaunchConfiguration(
+        "navi_motion_watchdog_enabled")
+    navi_motion_watchdog_pose_enabled = LaunchConfiguration(
+        "navi_motion_watchdog_pose_enabled")
+    navi_motion_watchdog_warmup_sec = LaunchConfiguration(
+        "navi_motion_watchdog_warmup_sec")
+    navi_motion_watchdog_window_sec = LaunchConfiguration(
+        "navi_motion_watchdog_window_sec")
+    navi_motion_watchdog_translation_m = LaunchConfiguration(
+        "navi_motion_watchdog_translation_m")
+    navi_motion_watchdog_yaw_deg = LaunchConfiguration(
+        "navi_motion_watchdog_yaw_deg")
+    nav_zero_command_cancel_sec = LaunchConfiguration(
+        "nav_zero_command_cancel_sec")
+    require_system_ready_for_motion = LaunchConfiguration(
+        "require_system_ready_for_motion")
     show_serial_window = LaunchConfiguration("show_serial_window")
+    require_depth_baseline_for_ps2 = LaunchConfiguration(
+        "require_depth_baseline_for_ps2")
+    auto_nav_ps2_handoff = LaunchConfiguration("auto_nav_ps2_handoff")
+    chassis_publish_tf = LaunchConfiguration("chassis_publish_tf")
+    cartographer_odom_topic = LaunchConfiguration("cartographer_odom_topic")
     enable_fixed_scan_filter = LaunchConfiguration(
         "enable_fixed_scan_filter")
     filtered_scan_topic = LaunchConfiguration("filtered_scan_topic")
@@ -58,6 +90,9 @@ def generate_launch_description():
             "serial_port": lidar_serial_port,
             "baudrate": ParameterValue(lidar_baudrate, value_type=int),
             "frame_id": "laser_frame",
+            "laser_x": ParameterValue(laser_x, value_type=float),
+            "laser_y": ParameterValue(laser_y, value_type=float),
+            "laser_z": ParameterValue(laser_z, value_type=float),
             "scan_interval": 0.1,
             "laser_yaw_deg": ParameterValue(laser_yaw_deg, value_type=float),
             "scan_angle_sign": ParameterValue(scan_angle_sign, value_type=float),
@@ -67,13 +102,14 @@ def generate_launch_description():
             "fixed_timed_scan_topic": cartographer_scan_topic,
             "fixed_scan_bins": ParameterValue(fixed_scan_bins, value_type=int),
             "fixed_scan_min_raw_points": 300,
-            "fixed_scan_max_raw_points": 480,
+            "fixed_scan_max_raw_points": 720,
             "fixed_scan_min_valid_points": ParameterValue(
                 fixed_scan_min_valid_points, value_type=int),
             "fixed_scan_min_time_sec": 0.10,
-            "fixed_scan_max_time_sec": 0.25,
+            "fixed_scan_max_time_sec": 0.35,
             "clock_max_adjustment_ns": ParameterValue(
                 lidar_clock_max_adjustment_ns, value_type=int),
+            "serial_stall_timeout_sec": 1.0,
         }],
     )
 
@@ -93,7 +129,7 @@ def generate_launch_description():
             "odom_frame": "odom",
             "base_frame": "base_link",
             "odom_topic": "/odom",
-            "publish_tf": True,
+            "publish_tf": ParameterValue(chassis_publish_tf, value_type=bool),
             "use_imu_rp": False,
             "publish_cartographer_planar_imu": True,
             "publish_rate": 50.0,
@@ -105,6 +141,8 @@ def generate_launch_description():
             "navi_yaw_offset_deg": ParameterValue(
                 navi_yaw_offset_deg, value_type=float),
             "navi_odom_yaw_source": navi_odom_yaw_source,
+            "navi_max_yaw_rate_deg_s": ParameterValue(
+                navi_max_yaw_rate_deg_s, value_type=float),
             "navi_vx_scale": ParameterValue(
                 navi_vx_scale, value_type=float),
             "navi_vx_deadband_mps": 0.003,
@@ -112,9 +150,36 @@ def generate_launch_description():
                 navi_turn_vx_scale, value_type=float),
             "navi_turn_wz_threshold_rad_s": ParameterValue(
                 navi_turn_wz_threshold_rad_s, value_type=float),
+            "navi_adaptive_clock_sync": ParameterValue(
+                navi_adaptive_clock_sync, value_type=bool),
+            "navi_clock_window_samples": ParameterValue(
+                navi_clock_window_samples, value_type=int),
+            "navi_clock_max_adjustment_ns": ParameterValue(
+                navi_clock_max_adjustment_ns, value_type=int),
+            "navi_motion_watchdog_enabled": ParameterValue(
+                navi_motion_watchdog_enabled, value_type=bool),
+            "navi_motion_watchdog_pose_enabled": ParameterValue(
+                navi_motion_watchdog_pose_enabled, value_type=bool),
+            "navi_motion_watchdog_warmup_sec": ParameterValue(
+                navi_motion_watchdog_warmup_sec, value_type=float),
+            "navi_motion_watchdog_window_sec": ParameterValue(
+                navi_motion_watchdog_window_sec, value_type=float),
+            "navi_motion_watchdog_translation_m": ParameterValue(
+                navi_motion_watchdog_translation_m, value_type=float),
+            "navi_motion_watchdog_yaw_deg": ParameterValue(
+                navi_motion_watchdog_yaw_deg, value_type=float),
+            "nav_zero_command_cancel_sec": ParameterValue(
+                nav_zero_command_cancel_sec, value_type=float),
+            "require_system_ready_for_motion": ParameterValue(
+                require_system_ready_for_motion, value_type=bool),
             "navi_vz_deadband_deg_s": 0.15,
             "show_serial_window": ParameterValue(
                 show_serial_window, value_type=bool),
+            "require_depth_baseline_for_ps2": ParameterValue(
+                require_depth_baseline_for_ps2, value_type=bool),
+            "auto_nav_ps2_handoff": ParameterValue(
+                auto_nav_ps2_handoff, value_type=bool),
+            "nav_ps2_release_delay_sec": 0.75,
         }],
     )
 
@@ -143,7 +208,7 @@ def generate_launch_description():
         ],
         remappings=[
             ("scan", cartographer_input_topic),
-            ("odom", "/odom"),
+            ("odom", cartographer_odom_topic),
             ("imu", "/imu_cartographer"),
         ],
     )
@@ -170,7 +235,8 @@ def generate_launch_description():
             "odom_frame": "odom",
             "base_frame": "base_link",
             "orientation_source": "map",
-            "publish_rate": 10.0,
+            # Also feeds /cartographer_pose_odom to the persistent 3D mapper.
+            "publish_rate": 30.0,
             "topic": "/robot_pose",
         }],
     )
@@ -192,6 +258,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "lidar_serial_port", default_value="/dev/ttyUSB1"),
         DeclareLaunchArgument("lidar_baudrate", default_value="115200"),
+        DeclareLaunchArgument("laser_x", default_value="0.20"),
+        DeclareLaunchArgument("laser_y", default_value="0.0"),
+        DeclareLaunchArgument("laser_z", default_value="0.0"),
         DeclareLaunchArgument(
             "chassis_serial_port", default_value="/dev/ttyUSB0"),
         DeclareLaunchArgument("laser_yaw_deg", default_value="0.0"),
@@ -202,6 +271,8 @@ def generate_launch_description():
         DeclareLaunchArgument("navi_yaw_offset_deg", default_value="0.0"),
         DeclareLaunchArgument(
             "navi_odom_yaw_source", default_value="absolute"),
+        DeclareLaunchArgument(
+            "navi_max_yaw_rate_deg_s", default_value="120.0"),
         DeclareLaunchArgument(
             "cartographer_config",
             default_value="cartographer_2d_v9_tightened.lua",
@@ -226,11 +297,63 @@ def generate_launch_description():
         DeclareLaunchArgument("navi_turn_vx_scale", default_value="0.75"),
         DeclareLaunchArgument(
             "navi_turn_wz_threshold_rad_s", default_value="0.25"),
+        DeclareLaunchArgument("navi_adaptive_clock_sync", default_value="false"),
+        DeclareLaunchArgument("navi_clock_window_samples", default_value="250"),
+        DeclareLaunchArgument("navi_clock_max_adjustment_ns", default_value="20000"),
+        DeclareLaunchArgument(
+            "navi_motion_watchdog_enabled", default_value="true"),
+        DeclareLaunchArgument(
+            "navi_motion_watchdog_pose_enabled",
+            default_value="false",
+            description=(
+                "Diagnostic map-pose cross-check. Keep false for navigation: "
+                "Cartographer loop corrections are not physical chassis motion."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "navi_motion_watchdog_warmup_sec", default_value="6.0"),
+        DeclareLaunchArgument(
+            "navi_motion_watchdog_window_sec", default_value="0.75"),
+        DeclareLaunchArgument(
+            "navi_motion_watchdog_translation_m", default_value="0.08"),
+        DeclareLaunchArgument(
+            "navi_motion_watchdog_yaw_deg", default_value="3.0"),
+        DeclareLaunchArgument(
+            "nav_zero_command_cancel_sec",
+            default_value="25.0",
+            description=(
+                "Cancel a Nav2 goal that has produced no effective safe "
+                "velocity for this long, then restore PS2."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "require_system_ready_for_motion",
+            default_value="false",
+            description="Hold MOVE zero until /robot/system_ready is true",
+        ),
         DeclareLaunchArgument(
             "odom_publish_mode", default_value="navi",
             description="timer keeps legacy behavior; navi publishes each 0x07 sample",
         ),
         DeclareLaunchArgument("show_serial_window", default_value="true"),
+        DeclareLaunchArgument(
+            "require_depth_baseline_for_ps2",
+            default_value="true",
+            description="Require legacy depth baseline before PS2 release",
+        ),
+        DeclareLaunchArgument(
+            "auto_nav_ps2_handoff",
+            default_value="false",
+            description="Automatically switch STM32 between Nav2 MOVE and idle PS2",
+        ),
+        DeclareLaunchArgument(
+            "chassis_publish_tf", default_value="true",
+            description="Disable when robot_localization owns odom->base_link",
+        ),
+        DeclareLaunchArgument(
+            "cartographer_odom_topic", default_value="/odom",
+            description="Raw or EKF-filtered odometry input for Cartographer",
+        ),
         DeclareLaunchArgument(
             "enable_fixed_scan_filter", default_value="false"),
         DeclareLaunchArgument(

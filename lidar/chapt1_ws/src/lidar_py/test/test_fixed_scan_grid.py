@@ -41,6 +41,18 @@ def test_point_count_changes_do_not_change_output_geometry():
     assert scan_384.angle_min == scan_396.angle_min
 
 
+def test_slow_valid_revolution_from_real_lidar_is_accepted():
+    builder = FixedScanGridBuilder(bins=360, angle_sign=-1.0)
+    _start_at_boundary(builder)
+
+    scan = _finish_revolution(builder, 630, 0, 270_000_000)
+
+    assert scan is not None
+    assert scan.raw_point_count == 630
+    assert math.isclose(scan.scan_time, 0.27)
+    assert scan.filled_bin_count == 360
+
+
 def test_measured_angle_selects_the_grid_cell():
     builder = FixedScanGridBuilder(bins=360, angle_sign=1.0)
     _start_at_boundary(builder)

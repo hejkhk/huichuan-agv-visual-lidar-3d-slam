@@ -4,6 +4,7 @@
 import json
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
@@ -126,11 +127,12 @@ def main(args=None):
     node = WebPathPreviewNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

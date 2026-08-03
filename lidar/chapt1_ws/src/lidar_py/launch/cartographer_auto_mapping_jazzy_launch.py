@@ -1,14 +1,11 @@
-"""Cartographer V13 with native ROS 2 Jazzy Nav2 and frontier exploration.
+"""Cartographer V13 with distro-aware ROS 2 Nav2 and frontier exploration.
 
 The validated Cartographer launch is included without modifying its mapping
-parameters.  This file owns only navigation, depth safety fusion, web bridges,
-and the Jazzy frontier explorer imported from auto_mapping_v1.
+parameters. This file owns navigation, depth safety fusion and web bridges.
+The public Humble launcher delegates here while selecting Humble-native files.
 """
 
-import json
 import os
-import shutil
-import tempfile
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -16,7 +13,6 @@ from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
     LogInfo,
-    OpaqueFunction,
     SetEnvironmentVariable,
 )
 from launch.conditions import IfCondition
@@ -25,66 +21,27 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-
-def _create_planner_server(context, nav_params, use_sim_time, lattice_file,
-                           remappings):
-    """Validate and stage the lattice under an ASCII-only runtime path."""
-    source_path = os.path.abspath(os.path.expanduser(lattice_file.perform(context)))
-    if not os.path.isfile(source_path):
-        raise RuntimeError("State Lattice file does not exist: %s" % source_path)
-    try:
-        with open(source_path, "r", encoding="utf-8") as stream:
-            lattice = json.load(stream)
-    except (OSError, ValueError) as exc:
-        raise RuntimeError("Invalid State Lattice JSON: %s (%s)" %
-                           (source_path, exc)) from exc
-    if "lattice_metadata" not in lattice or not lattice.get("primitives"):
-        raise RuntimeError("State Lattice metadata/primitives missing: %s" % source_path)
-
-    runtime_dir = os.path.join(
-        tempfile.gettempdir(),
-        "car_nav2_jazzy_%s" % getattr(os, "getuid", lambda: 0)(),
-    )
-    os.makedirs(runtime_dir, exist_ok=True)
-    runtime_path = os.path.join(runtime_dir, "lattice_forward_turnaround_5cm.json")
-    shutil.copyfile(source_path, runtime_path)
-    os.chmod(runtime_path, 0o644)
-
-    return [
-        LogInfo(msg="[nav2-jazzy] State Lattice: %s" % runtime_path),
-        Node(
-            package="nav2_planner",
-            executable="planner_server",
-            name="planner_server",
-            output="screen",
-            parameters=[
-                nav_params,
-                {
-                    "use_sim_time": use_sim_time,
-                    "GridBased.lattice_filepath": runtime_path,
-                },
-            ],
-            remappings=remappings,
-        ),
-    ]
-
-
 def generate_launch_description():
     package_dir = get_package_share_directory("lidar_py")
     frontier_dir = get_package_share_directory("frontier_exploration_ros2")
+    ros_distro = os.environ.get("ROS_DISTRO", "humble").lower()
+    nav_suffix = "humble" if ros_distro == "humble" else "jazzy"
 
     stable_launch = os.path.join(
         package_dir, "launch", "cartographer_scan_v2_launch.py")
     default_nav_params = os.path.join(
-        package_dir, "config", "nav2_auto_mapping_jazzy.yaml")
+        package_dir, "config", f"nav2_auto_mapping_{nav_suffix}.yaml")
+    default_controller_override = os.path.join(
+        package_dir, "config",
+        "nav2_dual_3d_rpp_humble_override.yaml"
+        if nav_suffix == "humble" else "nav2_dual_3d_rpp_override.yaml")
     default_frontier_params = os.path.join(
-        package_dir, "config", "frontier_auto_mapping_jazzy.yaml")
+        package_dir, "config", f"frontier_auto_mapping_{nav_suffix}.yaml")
     default_bt_xml = os.path.join(
-        package_dir, "behavior_trees", "navigate_to_pose_jazzy.xml")
+        package_dir, "behavior_trees", f"navigate_to_pose_{nav_suffix}.xml")
     default_through_bt_xml = os.path.join(
-        package_dir, "behavior_trees", "navigate_through_poses_jazzy.xml")
-    default_lattice = os.path.join(
-        package_dir, "config", "lattice_forward_turnaround_5cm.json")
+        package_dir, "behavior_trees",
+        f"navigate_through_poses_{nav_suffix}.xml")
     frontier_launch = os.path.join(
         frontier_dir, "launch", "frontier_explorer.launch.py")
     rviz_config = os.path.join(package_dir, "rviz", "nav2_display.rviz")
@@ -95,17 +52,19 @@ def generate_launch_description():
     explorer_autostart = LaunchConfiguration("explorer_autostart")
     launch_rviz = LaunchConfiguration("launch_rviz")
     nav_params = LaunchConfiguration("nav_params_file")
+    controller_override = LaunchConfiguration("controller_override_file")
+    costmap_override = LaunchConfiguration("costmap_override_file")
     frontier_params = LaunchConfiguration("frontier_params_file")
     bt_xml = LaunchConfiguration("bt_xml_file")
     through_bt_xml = LaunchConfiguration("through_bt_xml_file")
-    lattice_file = LaunchConfiguration("lattice_file")
     require_depth_baseline = LaunchConfiguration("require_depth_baseline")
 
     common_remappings = [("/tf", "tf"), ("/tf_static", "tf_static")]
-    velocity_remappings = common_remappings + [("/cmd_vel", "/cmd_vel_nav")]
+    raw_velocity_remappings = common_remappings + [
+        ("/cmd_vel", "/cmd_vel_nav_raw")]
     lifecycle_nodes = [
         "controller_server",
-        "smoother_server",
+        "velocity_smoother",
         "planner_server",
         "behavior_server",
         "bt_navigator",
@@ -114,6 +73,7 @@ def generate_launch_description():
 
     stable_cartographer = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(stable_launch),
+        condition=IfCondition(LaunchConfiguration("start_cartographer")),
         launch_arguments={
             "use_sim_time": use_sim_time,
             "use_rviz": "false",
@@ -127,7 +87,8 @@ def generate_launch_description():
             "navi_vz_sign": "1.0",
             "navi_yaw_offset_deg": "0.0",
             "navi_odom_yaw_source": "absolute",
-            "cartographer_config": "cartographer_2d_v9_tightened.lua",
+            "cartographer_config": LaunchConfiguration(
+                "cartographer_config"),
             "cartographer_scan_topic": "/scan_timed_v2",
             "fixed_scan_bins": "360",
             "fixed_scan_min_valid_points": "180",
@@ -146,28 +107,53 @@ def generate_launch_description():
         executable="controller_server",
         name="controller_server",
         output="screen",
-        parameters=[nav_params, {"use_sim_time": use_sim_time_bool}],
-        remappings=velocity_remappings,
+        parameters=[
+            nav_params,
+            controller_override,
+            costmap_override,
+            {"use_sim_time": use_sim_time_bool},
+        ],
+        remappings=raw_velocity_remappings,
     )
-    smoother_server = Node(
-        package="nav2_smoother",
-        executable="smoother_server",
-        name="smoother_server",
+    velocity_smoother = Node(
+        package="nav2_velocity_smoother",
+        executable="velocity_smoother",
+        name="velocity_smoother",
         output="screen",
-        parameters=[nav_params, {"use_sim_time": use_sim_time_bool}],
-        remappings=common_remappings,
+        parameters=[
+            nav_params,
+            controller_override,
+            {"use_sim_time": use_sim_time_bool},
+        ],
+        remappings=common_remappings + [
+            ("/cmd_vel", "/cmd_vel_nav_raw"),
+            ("/cmd_vel_smoothed", "/cmd_vel_nav"),
+        ],
     )
-    planner_server = OpaqueFunction(
-        function=_create_planner_server,
-        args=[nav_params, use_sim_time_bool, lattice_file, common_remappings],
+    planner_server = Node(
+        package="nav2_planner",
+        executable="planner_server",
+        name="planner_server",
+        output="screen",
+        parameters=[
+            nav_params,
+            controller_override,
+            costmap_override,
+            {"use_sim_time": use_sim_time_bool},
+        ],
+        remappings=common_remappings,
     )
     behavior_server = Node(
         package="nav2_behaviors",
         executable="behavior_server",
         name="behavior_server",
         output="screen",
-        parameters=[nav_params, {"use_sim_time": use_sim_time_bool}],
-        remappings=velocity_remappings,
+        parameters=[
+            nav_params,
+            controller_override,
+            {"use_sim_time": use_sim_time_bool},
+        ],
+        remappings=raw_velocity_remappings,
     )
     bt_navigator = Node(
         package="nav2_bt_navigator",
@@ -210,6 +196,7 @@ def generate_launch_description():
         launch_arguments={
             "params_file": frontier_params,
             "use_sim_time": use_sim_time,
+            "log_level": "warn",
             "autostart": explorer_autostart,
             "control_service_enabled": "true",
         }.items(),
@@ -222,15 +209,45 @@ def generate_launch_description():
         output="screen",
         parameters=[{
             "nav_cmd_topic": "/cmd_vel_nav",
+            "nav_raw_cmd_topic": "/cmd_vel_nav_raw",
             "web_cmd_topic": "/cmd_vel_web",
             "depth_topic": "/depth_obstacle",
             "safe_cmd_topic": "/cmd_vel_safe",
             "wheel_topic": "/wheel_speed_cmd",
             "virtual_scan_topic": "/depth_obstacle_scan",
             "virtual_scan_frame": "base_link",
+            "local_cloud_topic": LaunchConfiguration("local_cloud_topic"),
+            "collision_stop_topic": "/local_cloud_collision_stop",
+            "collision_status_topic": "/local_cloud_collision_status",
+            "navigation_sensor_health_topic":
+                "/robot/navigation_sensor_healthy",
+            "local_cloud_timeout_sec": ParameterValue(
+                LaunchConfiguration("local_cloud_timeout_sec"),
+                value_type=float),
+            "require_local_cloud_alive": ParameterValue(
+                LaunchConfiguration("require_local_cloud_alive"),
+                value_type=bool),
             "max_v": 0.23,
             "max_w": 0.80,
-            "nav_arc_outer_wheel_mps": 0.16,
+            "nav_arc_outer_wheel_mps": 0.18,
+            "nav_arc_yaw_gain": 1.45,
+            "nav_arc_max_w": 0.32,
+            "nav_arc_gain_min_v": 0.10,
+            "nav_arc_gain_min_radius": 0.70,
+            "nav_pure_turn_min_w": 0.08,
+            # Keep the measured 1.45 fixed skid-steer correction. Learning is
+            # disabled so a short slip event cannot change future curvature.
+            "nav_arc_adaptive_enabled": False,
+            "nav_arc_gain_min": 1.10,
+            "nav_arc_gain_max": 1.80,
+            "nav_arc_gain_learning_rate": 0.08,
+            "nav_arc_gain_settle_sec": 0.60,
+            "nav_arc_gain_update_period_sec": 0.25,
+            "odom_topic": "/odom",
+            "approach_slow_distance_m": 1.20,
+            "approach_stop_distance_m": 0.62,
+            "approach_min_scale": 0.30,
+            "collision_status_timeout_sec": 0.50,
             "level_release_hold_sec": 0.40,
             "direction_switch_margin": 80,
             "direction_switch_frames": 6,
@@ -265,6 +282,9 @@ def generate_launch_description():
         output="screen",
         parameters=[{
             "goal_topic": "/web/nav_goal",
+            # RViz's 2D Goal Pose already calls NavigateToPose in Jazzy.
+            # Bridging /goal_pose again would submit the same goal twice.
+            "bridge_rviz_goal": False,
             "robot_pose_topic": "/robot_pose",
             "nav_action": "/navigate_to_pose",
             "force_yaw_to_goal": True,
@@ -308,11 +328,23 @@ def generate_launch_description():
         DeclareLaunchArgument("explorer_autostart", default_value="false"),
         DeclareLaunchArgument("launch_rviz", default_value="true"),
         DeclareLaunchArgument("require_depth_baseline", default_value="true"),
+        DeclareLaunchArgument(
+            "local_cloud_topic",
+            default_value="/local_highres_cloud_v21/sensor"),
+        DeclareLaunchArgument("local_cloud_timeout_sec", default_value="0.50"),
+        DeclareLaunchArgument("require_local_cloud_alive", default_value="false"),
+        DeclareLaunchArgument("start_cartographer", default_value="true"),
+        DeclareLaunchArgument(
+            "cartographer_config",
+            default_value="cartographer_2d_v9_nav_guarded.lua"),
         DeclareLaunchArgument("nav_params_file", default_value=default_nav_params),
+        DeclareLaunchArgument(
+            "controller_override_file", default_value=default_controller_override),
+        DeclareLaunchArgument(
+            "costmap_override_file", default_value=default_nav_params),
         DeclareLaunchArgument("frontier_params_file", default_value=default_frontier_params),
         DeclareLaunchArgument("bt_xml_file", default_value=default_bt_xml),
         DeclareLaunchArgument("through_bt_xml_file", default_value=default_through_bt_xml),
-        DeclareLaunchArgument("lattice_file", default_value=default_lattice),
         DeclareLaunchArgument("lidar_serial_port", default_value="/dev/ttyUSB1"),
         DeclareLaunchArgument("lidar_baudrate", default_value="115200"),
         DeclareLaunchArgument("chassis_serial_port", default_value="/dev/ttyUSB0"),
@@ -321,7 +353,7 @@ def generate_launch_description():
         DeclareLaunchArgument("show_serial_window", default_value="false"),
         stable_cartographer,
         controller_server,
-        smoother_server,
+        velocity_smoother,
         planner_server,
         behavior_server,
         bt_navigator,

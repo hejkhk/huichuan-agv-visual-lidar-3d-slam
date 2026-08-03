@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeo pipefail
 
-# Unified one-key launcher for tested Cartographer V13 + native Jazzy Nav2.
+# Unified one-key launcher for tested Cartographer V13 + native Humble Nav2.
 #
 # open_all.sh:
 #   - periodic map/NAVI logging is available and controlled by the web page
@@ -16,10 +16,10 @@ ROAD_DIR="${ROAD_DIR:-$ROOT_DIR/road_v5_5_640_modular_v7_unified_io}"
 WEB_DIR="${WEB_DIR:-$ROOT_DIR/web}"
 WEB_STOP_SCRIPT="$ROOT_DIR/web_ctrl/stop_web.py"
 
-# Jazzy rosidl generation can fail below a non-ASCII physical build path.
+# rosidl generation can fail below a non-ASCII physical build path.
 # Keep source in the project, but build the C++ service packages through an
 # ASCII-only symlink and install prefix.
-ASCII_WS_BASE="${CAR_JAZZY_BUILD_ROOT:-$HOME/.cache/huichuan_agv_jazzy_ws}"
+ASCII_WS_BASE="${CAR_HUMBLE_BUILD_ROOT:-$HOME/.cache/huichuan_agv_humble_ws}"
 ASCII_SRC_LINK="$ASCII_WS_BASE/src"
 AUTO_BUILD_BASE="$ASCII_WS_BASE/build"
 AUTO_INSTALL_BASE="$ASCII_WS_BASE/install"
@@ -27,7 +27,7 @@ AUTO_LOG_BASE="$ASCII_WS_BASE/log"
 SYSTEM_PYTHON="${CAR_SYSTEM_PYTHON:-/usr/bin/python3}"
 
 ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-${ROS_DOMAIN:-88}}"
-NAV_PROFILE="${NAV_PROFILE:-jazzy_native}"
+NAV_PROFILE="${NAV_PROFILE:-humble_native}"
 AUTO_START="${AUTO_START:-false}"
 ENABLE_VISION="${ENABLE_VISION:-true}"
 START_WEB="${START_WEB:-true}"
@@ -42,7 +42,7 @@ LOG_DEFAULT_INTERVAL_SEC="${LOG_DEFAULT_INTERVAL_SEC:-3.0}"
 # three files because even a small scan or matcher change invalidates the
 # vehicle test results.
 EXPECTED_CARTOGRAPHER_HASH="00dfd1c721f0fe8c61ac6f2b417001920694e4fc77e895fb4a1f194330c910d9"
-EXPECTED_SCAN_LAUNCH_HASH="5650100fbdaf7fd40bdb6cc8dfaa1d642b7fa44aa914028c48817af5be5a9106"
+EXPECTED_SCAN_LAUNCH_HASH="0571d9810aa44b32ecb7e283fcf035f83089de824ce2ec2a6530a6cdcbb26c4f"
 EXPECTED_SCAN_FILTER_HASH="8583a2ca7e99a29b13f2fc339df468e621562d61f0adfa1e7e1828254705b306"
 
 RUN_STAMP="$(date +%Y-%m-%d_%H-%M-%S)"
@@ -63,8 +63,8 @@ declare -a KNOWN_STACK_PATTERNS=(
     "lidar_node"
     "scan_to_scan_filter_chain"
     "controller_server"
+    "velocity_smoother"
     "planner_server"
-    "smoother_server"
     "behavior_server"
     "bt_navigator"
     "waypoint_follower"
@@ -79,7 +79,7 @@ declare -a KNOWN_STACK_PATTERNS=(
     "node_modules/vite/bin/vite.js"
     "ros2 launch lidar_py"
     "ros2 run rosbridge_server"
-    "cartographer_auto_mapping_jazzy_launch.py"
+    "cartographer_auto_mapping_humble_launch.py"
     "ros2 bag record"
     "_ros2_daemon"
 )
@@ -671,7 +671,7 @@ grant_device_permissions() {
     done
 }
 
-check_jazzy_build_dependencies() {
+check_humble_build_dependencies() {
     is_true "$SKIP_BUILD" && return 0
 
     local package
@@ -680,12 +680,12 @@ check_jazzy_build_dependencies() {
         python3-empy
         python3-lark
         python3-yaml
-        ros-jazzy-navigation2
-        ros-jazzy-nav2-bringup
-        ros-jazzy-cartographer-ros
-        ros-jazzy-laser-filters
-        ros-jazzy-rosbridge-server
-        ros-jazzy-rmw-cyclonedds-cpp
+        ros-humble-navigation2
+        ros-humble-nav2-bringup
+        ros-humble-cartographer-ros
+        ros-humble-laser-filters
+        ros-humble-rosbridge-server
+        ros-humble-rmw-cyclonedds-cpp
     )
 
     for package in "${required_apt_packages[@]}"; do
@@ -693,7 +693,7 @@ check_jazzy_build_dependencies() {
     done
 
     if [ "${#missing[@]}" -gt 0 ]; then
-        log "[error] Missing ROS 2 Jazzy runtime/build dependencies:"
+        log "[error] Missing ROS 2 Humble runtime/build dependencies:"
         printf '  - %s\n' "${missing[@]}"
         log "Install them with:"
         log "  sudo apt install -y ${missing[*]}"
@@ -703,7 +703,7 @@ check_jazzy_build_dependencies() {
     [ -x "$SYSTEM_PYTHON" ] ||
         die "System Python is missing or not executable: $SYSTEM_PYTHON"
     if ! "$SYSTEM_PYTHON" -I -c 'import em, lark, yaml' >/dev/null 2>&1; then
-        log "[error] Jazzy build modules are unavailable to $SYSTEM_PYTHON."
+        log "[error] Humble build modules are unavailable to $SYSTEM_PYTHON."
         log "Install them with:"
         log "  sudo apt install -y python3-empy python3-lark python3-yaml"
         die "System Python build modules are incomplete."
@@ -829,7 +829,7 @@ shutdown_nav2_lifecycle() {
     # Fallback if the lifecycle-manager service cannot complete. Clean plugin state
     # before the launch process receives SIGINT to avoid CycloneDDS teardown
     # races in controller_server/behavior_server.
-    for node in /waypoint_follower /bt_navigator /behavior_server /planner_server /smoother_server /controller_server; do
+    for node in /waypoint_follower /bt_navigator /behavior_server /planner_server /velocity_smoother /controller_server; do
         hard_timeout 6s ros2 lifecycle set "$node" shutdown >/dev/null 2>&1 || true
     done
     sleep 2
@@ -948,8 +948,8 @@ trap 'request_shutdown 143' TERM
 trap 'request_shutdown 143' HUP
 trap cleanup EXIT
 
-[ "$NAV_PROFILE" = "jazzy_native" ] ||
-    die "NAV_PROFILE is fixed to jazzy_native on Ubuntu 24.04 / ROS 2 Jazzy."
+[ "$NAV_PROFILE" = "humble_native" ] ||
+    die "NAV_PROFILE is fixed to humble_native on Ubuntu 22.04 / ROS 2 Humble."
 
 # Normalize display toggles so the launch summary is the exact value passed
 # into ROS, including when a parent shell exported an older setting.
@@ -962,7 +962,7 @@ log "============================================================"
 log "  CAR unified launcher"
 log "  Profile       : $RUN_PROFILE_NAME"
 log "  SLAM backend  : Cartographer V13 only"
-log "  Nav profile   : $NAV_PROFILE (native State Lattice)"
+log "  Nav profile   : $NAV_PROFILE (SmacPlanner2D + Regulated Pure Pursuit)"
 log "  LiDAR         : $LIDAR_PORT @ $LIDAR_BAUD"
 log "  STM32         : $CHASSIS_PORT @ 115200"
 log "  ROS domain    : $ROS_DOMAIN_ID"
@@ -977,8 +977,8 @@ log "  NAVI GUI      : $SHOW_NAVI_GUI"
 log "  Runtime log   : $RUNTIME_STACK_LOG"
 log "============================================================"
 
-[ -f /opt/ros/jazzy/setup.bash ] ||
-    die "/opt/ros/jazzy/setup.bash was not found. Install ROS 2 Jazzy first."
+[ -f /opt/ros/humble/setup.bash ] ||
+    die "/opt/ros/humble/setup.bash was not found. Install ROS 2 Humble first."
 [ -d "$LIDAR_WS" ] || die "ROS workspace not found: $LIDAR_WS"
 [ -f "$ROOT_DIR/slam_logger.py" ] ||
     die "slam_logger.py not found under $ROOT_DIR"
@@ -1006,7 +1006,9 @@ fi
 
 unset PYTHONPATH ROS_PACKAGE_PATH ROS_ROOT ROS_ETC_DIR ROS_VERSION
 unset CMAKE_PREFIX_PATH LD_LIBRARY_PATH
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash
+[ "${ROS_DISTRO:-}" = "humble" ] ||
+    die "Expected ROS_DISTRO=humble, got ${ROS_DISTRO:-unset}."
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export ROS_DOMAIN_ID
 export VISION_CODE_DIR="$ROAD_DIR"
@@ -1016,7 +1018,8 @@ command -v colcon >/dev/null 2>&1 || die "colcon is not installed."
 command -v setsid >/dev/null 2>&1 || die "setsid is not installed."
 command -v timeout >/dev/null 2>&1 || die "timeout is not installed."
 command -v node >/dev/null 2>&1 || die "Node.js is not installed."
-check_jazzy_build_dependencies
+check_humble_build_dependencies
+PYTHON_USER_SITE="$("$SYSTEM_PYTHON" -c 'import site; print(site.getusersitepackages())')"
 
 mkdir -p "$ASCII_WS_BASE"
 if [ -L "$ASCII_SRC_LINK" ]; then
@@ -1027,7 +1030,7 @@ fi
 ln -s "$LIDAR_WS/src" "$ASCII_SRC_LINK"
 cd "$ASCII_WS_BASE"
 if ! is_true "$SKIP_BUILD"; then
-    log "[1/7] Building Jazzy frontier, custom BT and lidar_py via ASCII workspace..."
+    log "[1/7] Building Humble frontier, C++ perception and lidar_py via ASCII workspace..."
     PYTHONNOUSERSITE=1 colcon --log-base "$AUTO_LOG_BASE" build \
         --base-paths "$ASCII_SRC_LINK" \
         --build-base "$AUTO_BUILD_BASE" \
@@ -1044,29 +1047,25 @@ fi
 source "$AUTO_INSTALL_BASE/setup.bash"
 
 for package in \
-    nav2_smac_planner nav2_rotation_shim_controller nav2_constrained_smoother \
-    dwb_core dwb_critics dwb_plugins \
-    frontier_exploration_ros2 short_goal_bt lidar_py; do
+    nav2_smac_planner nav2_regulated_pure_pursuit_controller \
+    nav2_velocity_smoother frontier_exploration_ros2 lidar_py; do
     ros2 pkg prefix "$package" >/dev/null 2>&1 ||
-        die "Required Jazzy package is not visible: $package"
+        die "Required Humble package is not visible: $package"
 done
 
-BT_PREFIX="$(ros2 pkg prefix short_goal_bt)"
-[ -f "$BT_PREFIX/lib/libshort_goal_behind_bt_node.so" ] ||
-    die "Jazzy custom BT plugin library is missing."
-
 LIDAR_SHARE="$(ros2 pkg prefix lidar_py)/share/lidar_py"
-NAV_PARAMS_FILE="$LIDAR_SHARE/config/nav2_auto_mapping_jazzy.yaml"
-FRONTIER_PARAMS_FILE="$LIDAR_SHARE/config/frontier_auto_mapping_jazzy.yaml"
-BT_XML_FILE="$LIDAR_SHARE/behavior_trees/navigate_to_pose_jazzy.xml"
-THROUGH_BT_XML_FILE="$LIDAR_SHARE/behavior_trees/navigate_through_poses_jazzy.xml"
-LATTICE_FILE="$LIDAR_SHARE/config/lattice_forward_turnaround_5cm.json"
+NAV_PARAMS_FILE="$LIDAR_SHARE/config/nav2_auto_mapping_humble.yaml"
+CONTROLLER_OVERRIDE_FILE="$LIDAR_SHARE/config/nav2_dual_3d_rpp_humble_override.yaml"
+FRONTIER_PARAMS_FILE="$LIDAR_SHARE/config/frontier_auto_mapping_humble.yaml"
+BT_XML_FILE="$LIDAR_SHARE/behavior_trees/navigate_to_pose_humble.xml"
+THROUGH_BT_XML_FILE="$LIDAR_SHARE/behavior_trees/navigate_through_poses_humble.xml"
 
 [ -f "$NAV_PARAMS_FILE" ] || die "Nav2 config missing: $NAV_PARAMS_FILE"
+[ -f "$CONTROLLER_OVERRIDE_FILE" ] ||
+    die "Smac/RPP override missing: $CONTROLLER_OVERRIDE_FILE"
 [ -f "$FRONTIER_PARAMS_FILE" ] || die "Frontier config missing: $FRONTIER_PARAMS_FILE"
 [ -f "$BT_XML_FILE" ] || die "Behavior tree missing: $BT_XML_FILE"
 [ -f "$THROUGH_BT_XML_FILE" ] || die "Through-poses behavior tree missing: $THROUGH_BT_XML_FILE"
-[ -r "$LATTICE_FILE" ] || die "State Lattice file missing or unreadable: $LATTICE_FILE"
 verify_mapping_baseline
 
 timeout 5s ros2 daemon stop >/dev/null 2>&1 || true
@@ -1078,11 +1077,11 @@ start_process_group "rosbridge" \
     --ros-args -p port:=9090 -p address:=0.0.0.0
 wait_for_port 9090 20 "ROSBridge"
 
-log "[3/7] Starting tested Cartographer V13 + native Jazzy Nav2..."
+log "[3/7] Starting tested Cartographer V13 + native Humble Nav2..."
 log "[3/7] Full ROS stack output is written directly to: $RUNTIME_STACK_LOG"
 start_process_group_logged "mapping-nav-stack" "$RUNTIME_STACK_LOG" \
-    env PYTHONPATH="/usr/lib/python3/dist-packages:$HOME/.local/lib/python3.12/site-packages:$ROAD_DIR:${PYTHONPATH:-}" \
-    ros2 launch lidar_py cartographer_auto_mapping_jazzy_launch.py \
+    env PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHON_USER_SITE:$ROAD_DIR:${PYTHONPATH:-}" \
+    ros2 launch lidar_py cartographer_auto_mapping_humble_launch.py \
     lidar_serial_port:="$LIDAR_PORT" \
     lidar_baudrate:="$LIDAR_BAUD" \
     chassis_serial_port:="$CHASSIS_PORT" \
@@ -1090,10 +1089,10 @@ start_process_group_logged "mapping-nav-stack" "$RUNTIME_STACK_LOG" \
     explorer_autostart:="$AUTO_START" \
     require_depth_baseline:="$ENABLE_VISION" \
     nav_params_file:="$NAV_PARAMS_FILE" \
+    controller_override_file:="$CONTROLLER_OVERRIDE_FILE" \
     frontier_params_file:="$FRONTIER_PARAMS_FILE" \
     bt_xml_file:="$BT_XML_FILE" \
     through_bt_xml_file:="$THROUGH_BT_XML_FILE" \
-    lattice_file:="$LATTICE_FILE" \
     show_serial_window:="$SHOW_NAVI_GUI" \
     launch_rviz:="$USE_RVIZ"
 STACK_PGID="$LAST_STARTED_PID"
@@ -1104,12 +1103,12 @@ wait_for_ros_node /cartographer_node 45 || die "Cartographer startup failed."
 wait_for_ros_node /cartographer_occupancy_grid_node 45 ||
     die "Cartographer occupancy-grid startup failed."
 wait_for_ros_node /controller_server 45 || die "Nav2 controller server startup failed."
-wait_for_ros_node /smoother_server 45 || die "Nav2 smoother server startup failed."
+wait_for_ros_node /velocity_smoother 45 || die "Nav2 velocity smoother startup failed."
 wait_for_ros_node /planner_server 45 || die "Nav2 planner server startup failed."
 wait_for_ros_node /behavior_server 45 || die "Nav2 behavior server startup failed."
 wait_for_ros_node /bt_navigator 45 || die "Nav2 BT navigator startup failed."
 wait_for_ros_node /waypoint_follower 45 || die "Nav2 waypoint follower startup failed."
-wait_for_ros_node /frontier_explorer 45 || die "Jazzy frontier explorer startup failed."
+wait_for_ros_node /frontier_explorer 45 || die "Humble frontier explorer startup failed."
 wait_for_ros_node /frontier_web_bridge 45 || die "Frontier web bridge startup failed."
 wait_for_ros_node /lifecycle_manager_navigation 45 ||
     die "Nav2 lifecycle manager startup failed."
@@ -1120,7 +1119,7 @@ fi
 for node in \
     /chassis_node /lidar_node /cartographer_node \
     /cartographer_occupancy_grid_node \
-    /controller_server /smoother_server /planner_server /behavior_server \
+    /controller_server /velocity_smoother /planner_server /behavior_server \
     /bt_navigator /waypoint_follower /frontier_explorer /frontier_web_bridge; do
     assert_single_ros_node "$node" ||
         die "Duplicate ROS node detected before Nav2 activation."
@@ -1142,10 +1141,10 @@ start_nav2_lifecycle ||
     die "Nav2 lifecycle startup failed after the first Cartographer map."
 wait_for_ros_lifecycle_active /controller_server 45 ||
     die "Nav2 controller_server exists but is not active. Check the first lifecycle error above."
-wait_for_ros_lifecycle_active /smoother_server 45 ||
-    die "Nav2 smoother_server exists but is not active."
+wait_for_ros_lifecycle_active /velocity_smoother 45 ||
+    die "Nav2 velocity_smoother exists but is not active."
 wait_for_ros_lifecycle_active /planner_server 45 ||
-    die "Nav2 planner_server exists but is not active. Check State Lattice loading above."
+    die "Nav2 planner_server exists but is not active. Check SmacPlanner2D loading above."
 wait_for_ros_lifecycle_active /behavior_server 45 ||
     die "Nav2 behavior_server exists but is not active."
 wait_for_ros_lifecycle_active /bt_navigator 45 ||
@@ -1157,7 +1156,7 @@ wait_for_ros_action /navigate_to_pose 30 ||
 wait_for_ros_action /compute_path_to_pose 30 ||
     die "Nav2 action /compute_path_to_pose is unavailable; web path preview cannot work."
 wait_for_ros_service /control_exploration 30 ||
-    die "Native Jazzy frontier control service is unavailable."
+    die "Native Humble frontier control service is unavailable."
 wait_for_ros_service /auto_mapping/set_enabled 30 ||
     die "Frontier web bridge service is unavailable."
 STACK_STARTED=true
@@ -1165,7 +1164,7 @@ STACK_STARTED=true
 if is_true "$ENABLE_VISION"; then
     log "[4/7] Starting SDK depth obstacle and MJPEG..."
     start_process_group "depth-obstacle" \
-        env PYTHONPATH="/usr/lib/python3/dist-packages:$HOME/.local/lib/python3.12/site-packages:$ROAD_DIR:${PYTHONPATH:-}" \
+        env PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHON_USER_SITE:$ROAD_DIR:${PYTHONPATH:-}" \
         "$SYSTEM_PYTHON" "$ROAD_DIR/depth_obstacle_node.py"
     wait_for_port 8080 35 "MJPEG video"
 else

@@ -85,7 +85,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: map
+    Fixed Frame: odom
     Frame Rate: 30
   Name: root
   Tools:
@@ -103,7 +103,7 @@ Visualization Manager:
         Z: 0
       Name: Current View
       Pitch: 1.55
-      Target Frame: map
+      Target Frame: odom
       Yaw: 3.14
 Window Geometry:
   Height: 900

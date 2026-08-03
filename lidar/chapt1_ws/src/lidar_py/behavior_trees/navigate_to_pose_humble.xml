@@ -1,0 +1,36 @@
+<!-- BehaviorTree.CPP 3 / Nav2 Humble compatible navigation tree. -->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <PipelineSequence name="NavigateWithStableReplanning">
+      <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
+      <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
+      <RateController hz="1.0">
+        <Fallback name="KeepOrComputeCollisionCheckedPath">
+          <ReactiveSequence name="KeepFreshValidPath">
+            <Inverter><PathExpiringTimer seconds="3.0" path="{path}"/></Inverter>
+            <Inverter><GlobalUpdatedGoal/></Inverter>
+            <IsPathValid path="{path}"/>
+          </ReactiveSequence>
+          <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}"/>
+          <ReactiveSequence name="RetainValidPathAfterPlannerFailure">
+            <Inverter><GlobalUpdatedGoal/></Inverter>
+            <IsPathValid path="{path}"/>
+          </ReactiveSequence>
+        </Fallback>
+      </RateController>
+      <RecoveryNode number_of_retries="2" name="FollowPath">
+        <FollowPath path="{path}" controller_id="{selected_controller}"/>
+        <Sequence name="BoundedControllerRecovery">
+          <IsPathValid path="{path}"/>
+          <RoundRobin name="SafeEscapeActions">
+            <BackUp name="ShortBackUp" backup_dist="0.16" backup_speed="0.05"/>
+            <Sequence name="BackOutThenSmallTurn">
+              <BackUp name="BackUpBeforeTurn" backup_dist="0.12" backup_speed="0.05"/>
+              <Spin name="SmallEscapeTurn" spin_dist="0.20"/>
+            </Sequence>
+          </RoundRobin>
+        </Sequence>
+      </RecoveryNode>
+    </PipelineSequence>
+  </BehaviorTree>
+</root>

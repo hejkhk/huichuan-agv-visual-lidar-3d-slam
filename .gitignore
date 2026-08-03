@@ -12,6 +12,20 @@ __pycache__/
 # Logs
 SLAM_Log/
 
+# Generated maps and persistent databases
+maps/rtabmap_3d/
+*.db
+*.db-shm
+*.db-wal
+*.pbstream
+
+# Runtime calibration/config backups
+*.env.bak.*
+
+# Accidental workspace links
+lidar/chapt1_ws/src/src
+lidar/chapt1_ws/src/local_depth_cloud_cpp/local_depth_cloud_cpp
+
 # OS
 .DS_Store
 Thumbs.db

@@ -59,7 +59,7 @@ def _create_frontier_actions(context):
         name="frontier_explorer",
         namespace=namespace,
         output="screen",
-        arguments=["--ros-args", "--log-level", log_level],
+        ros_arguments=["--log-level", log_level],
         parameters=[
             params_file,
             frontier_overrides,

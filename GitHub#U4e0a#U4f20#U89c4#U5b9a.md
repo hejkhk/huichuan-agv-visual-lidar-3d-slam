@@ -2,7 +2,7 @@
 
 本文档用于规范本项目向 GitHub 私有仓库提交和推送代码的流程。
 
-仓库地址：`https://github.com/hejkhk/huichuan-agv-ros2-foxy`
+仓库地址：`https://github.com/hejkhk/huichuan-agv-visual-lidar-3d-slam`
 
 ## 1. 基本原则
 
@@ -36,7 +36,7 @@
 
 ## 3. 允许上传的内容
 
-- ROS2 Jazzy 功能包源码、launch、config、URDF/TF 配置和行为树文件。
+- ROS 2 Humble 功能包源码、launch、config、URDF/TF 配置和行为树文件。
 - 视觉避障、串口通信、Nav2、Cartographer、网页控制台和自动建图源码。
 - `open_all.sh`、`open_all_log.sh`、验证脚本及项目使用文档。
 - 对复现实车问题确有必要且体积合理的示例地图；历史测试地图上传前应人工确认。

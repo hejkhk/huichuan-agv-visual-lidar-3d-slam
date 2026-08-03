@@ -1,15 +1,16 @@
 ROS_DOMAIN_ID=88
 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-ROS_DISTRO=jazzy
-UBUNTU_VERSION=24.04
-WORK_DIR=<项目根目录，由 open_all.sh 自动识别>
-BUILD_ROOT=~/.cache/huichuan_agv_jazzy_ws
+ROS_DISTRO=humble
+UBUNTU_VERSION=22.04
+WORK_DIR=<project root, detected by open_all.sh>
+BUILD_ROOT=~/.cache/huichuan_agv_humble_ws
 BUILD_PYTHON=/usr/bin/python3
-BUILD_PYTHON_POLICY=隔离 uv/Conda/用户 site-packages，不在中文物理路径直接 colcon build
-LAUNCH=cartographer_auto_mapping_jazzy_launch.py
-NAV_PROFILE=jazzy_native
-NAV2=Jazzy 原生 State Lattice + Rotation Shim + DWB + Constrained Smoother
-FRONTIER=frontier_exploration_ros2 原生 C++ 节点
+BUILD_PYTHON_VERSION=3.10
+BUILD_PYTHON_POLICY=isolate Conda/uv/user packages and build through ASCII cache
+LAUNCH=cartographer_auto_mapping_humble_launch.py
+NAV_PROFILE=humble_native
+NAV2=SmacPlanner2D + RegulatedPurePursuit + BT.CPP3 + STVL
+FRONTIER=frontier_exploration_ros2
 CONFIG=cartographer_2d_v9_tightened.lua
 navi_yaw_sign=1.0 navi_vx_sign=1.0 navi_vz_sign=1.0
 enable_fixed_scan_filter:=true
