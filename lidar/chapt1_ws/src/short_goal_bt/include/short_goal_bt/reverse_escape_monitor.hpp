@@ -5,8 +5,8 @@
 #include <mutex>
 #include <string>
 
-#include "behaviortree_cpp/action_node.h"
-#include "behaviortree_cpp/condition_node.h"
+#include "behaviortree_cpp_v3/action_node.h"
+#include "behaviortree_cpp_v3/condition_node.h"
 #include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/executors/single_threaded_executor.hpp"
 #include "rclcpp/rclcpp.hpp"

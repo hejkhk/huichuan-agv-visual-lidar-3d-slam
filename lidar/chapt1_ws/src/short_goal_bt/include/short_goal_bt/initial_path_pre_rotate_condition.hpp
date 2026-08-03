@@ -4,10 +4,9 @@
 #include <memory>
 #include <string>
 
-#include "behaviortree_cpp/condition_node.h"
-#include "behaviortree_cpp/json_export.h"
+#include "behaviortree_cpp_v3/condition_node.h"
 #include "geometry_msgs/msg/pose_stamped.hpp"
-#include "nav2_behavior_tree/json_utils.hpp"
+#include "nav2_behavior_tree/bt_conversions.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "tf2_ros/buffer.h"
@@ -29,8 +28,6 @@ public:
 
   static BT::PortsList providedPorts()
   {
-    BT::RegisterJsonDefinition<geometry_msgs::msg::PoseStamped>();
-    BT::RegisterJsonDefinition<nav_msgs::msg::Path>();
     return {
       BT::InputPort<geometry_msgs::msg::PoseStamped>("goal", "Navigation goal"),
       BT::InputPort<nav_msgs::msg::Path>("path", "Newly computed global path"),
