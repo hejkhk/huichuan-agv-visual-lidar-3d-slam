@@ -624,7 +624,7 @@ for pkg in orbbec_camera cartographer_ros laser_filters rtabmap_slam rtabmap_rvi
   check_pkg "$pkg"
 done
 if is_true "$ENABLE_NAVIGATION"; then
-  for pkg in nav2_controller nav2_rotation_shim_controller dwb_core nav2_costmap_2d nav2_bt_navigator nav2_smac_planner nav2_velocity_smoother; do
+  for pkg in nav2_controller nav2_rotation_shim_controller dwb_core dwb_plugins nav2_costmap_2d nav2_bt_navigator nav2_smac_planner nav2_velocity_smoother; do
     check_pkg "$pkg"
   done
   if is_true "$USE_RVIZ"; then

@@ -4129,3 +4129,10 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
 - 2D 雷达、3D STVL、视觉墙、长期 RTAB-Map 和 C++ 最终碰撞门；
 - 车体尺寸、导航二档速度、膨胀半径 `0.49 m` 与未知区域禁止规划；
 - STM32 协议和下位机代码。
+
+## Humble CI 补充修正
+
+- 将定制行为树头文件统一切换为 Humble 的 `behaviortree_cpp_v3`，移除仅 BT.CPP 4
+  存在的 JSON 注册接口；7 个节点已在 Ubuntu 22.04 CI 中完成编译。
+- 增加 `dwb_plugins` 运行时依赖及一键启动前检查。`dwb_core` 只提供控制器接口，
+  `dwb_plugins` 才包含 DWB 实际使用的 `StandardTrajectoryGenerator` 和轨迹评价插件。

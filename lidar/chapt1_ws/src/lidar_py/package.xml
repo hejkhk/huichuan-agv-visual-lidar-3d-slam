@@ -36,6 +36,7 @@
   <depend>nav2_regulated_pure_pursuit_controller</depend>
   <depend>nav2_rotation_shim_controller</depend>
   <depend>dwb_core</depend>
+  <depend>dwb_plugins</depend>
   <exec_depend>spatio_temporal_voxel_layer</exec_depend>
   <depend>frontier_exploration_ros2</depend>
   <depend>nav2_waypoint_follower</depend>
