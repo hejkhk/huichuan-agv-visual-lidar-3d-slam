@@ -4094,3 +4094,38 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
 - 全局 `static_layer.footprint_clearing_enabled` 恢复为 `true`。只清除真实 `0.665 x 0.665 m` 车体当前占据的区域，不清除 footprint 外的墙体、2D 雷达障碍或 RGB-D 障碍。
 - 一键启动源文件契约和 GitHub Humble 预检现同时要求局部、全局静态层都启用起点 footprint 清理，避免后续 YAML 覆盖再次引入该故障。
 - 日志后半段 `/dev/ttyACM0`、2D 扫描和 Gemini2 点云同时断流属于独立的 USB/设备掉线；现有安全看门狗正确保持零速，本次不通过放宽安全条件掩盖掉线。
+# 2026-08-04 V6.50：Humble 导航启用安全 DWB 双控制器与定制行为树
+
+## 修改原因
+
+对照 `all.beifen` 的实车导航实现后，确认它表现较好的核心并不是整套工程，而是
+`RotationShim + DWB / NoShim DWB` 动态切换和 7 个 C++ 行为树节点。当前项目此前虽然保留
+`short_goal_bt` 源码，但被 `COLCON_IGNORE` 排除，Humble 实际运行的是标准行为树和 RPP。
+
+## 本次修改
+
+1. `short_goal_bt` 依赖由 Jazzy 的 `behaviortree_cpp` 改为 Humble 的
+   `behaviortree_cpp_v3`，删除 `COLCON_IGNORE`，并由 `lidar_py` 声明运行依赖。
+2. `bt_navigator.plugin_lib_names` 加载 `short_goal_behind_bt_node`。其中包含
+   `ShortGoalBehind`、`InitialPathPreRotate`、`SpinSafetyCheck`、`SelectController`、
+   `ReverseEscapeMonitor`、`ControllerSelected` 和 `ReverseEscapeCompleted`。
+3. 新增 `nav2_dual_3d_dwb_humble_override.yaml`：保留 SmacPlanner2D、二档
+   `0.20 m/s`、完整 `0.665 m` 方形 footprint、现有 2D/3D costmap 和速度平滑；新增
+   `FollowPath`（RotationShim 包装 DWB）及可有限倒车的 `FollowPathNoShim`。
+4. 单点导航树保持 1 Hz 重规划与 3 秒路径有效期。新目标首次计算路径后，根据目标/路径方位
+   决定是否预旋转；只有局部和全局 costmap 的 `0.51 m` 完整扫掠圆都安全才允许 Spin，
+   否则切换 NoShim DWB，以差速弧线或小幅倒车腾出空间。
+5. 恢复倒车继续使用 Nav2 `BackUp` 的 footprint 碰撞预测，并通过
+   `ReverseEscapeMonitor` 同时检查 `/cmd_vel_nav` 和 `odom` 实际位移；6 秒未产生真实位移即
+   判定失败，不把“只发了倒车命令”误认为脱困成功。
+6. 一键启动默认切换至 DWB 配置，RPP 文件保留为回退，不删除。没有接入会直接发送
+   `/cmd_vel`、自动导航到 `(0,0)` 的 Python 三级脱困节点。
+7. Humble GitHub 验证改为实际编译 `short_goal_bt`，并让 controller、planner、behavior 和
+   `bt_navigator` lifecycle configure，确保 DWB、RotationShim 和定制 BT `.so` 真正可加载。
+
+## 未修改
+
+- Cartographer V13 参数及其基线哈希；
+- 2D 雷达、3D STVL、视觉墙、长期 RTAB-Map 和 C++ 最终碰撞门；
+- 车体尺寸、导航二档速度、膨胀半径 `0.49 m` 与未知区域禁止规划；
+- STM32 协议和下位机代码。

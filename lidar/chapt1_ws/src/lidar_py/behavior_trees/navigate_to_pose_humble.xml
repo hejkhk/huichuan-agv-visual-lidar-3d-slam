@@ -1,9 +1,12 @@
-<!-- BehaviorTree.CPP 3 / Nav2 Humble compatible navigation tree. -->
+<!-- BehaviorTree.CPP 3 / Nav2 Humble real-vehicle navigation tree. -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <PipelineSequence name="NavigateWithStableReplanning">
+    <PipelineSequence name="NavigateWithSafeControllerSelection">
       <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
       <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
+
+      <!-- Re-evaluate the global route every second and never retain it beyond
+           three seconds. This keeps dynamic 2D/3D obstacles in the decision. -->
       <RateController hz="1.0">
         <Fallback name="KeepOrComputeCollisionCheckedPath">
           <ReactiveSequence name="KeepFreshValidPath">
@@ -18,14 +21,69 @@
           </ReactiveSequence>
         </Fallback>
       </RateController>
-      <RecoveryNode number_of_retries="2" name="FollowPath">
+
+      <!-- Evaluate once for each new goal. Spin only when the complete square
+           chassis sweep is clear in both local and global costmaps. -->
+      <Fallback name="InitialAlignmentOrCollisionSafeArc">
+        <Inverter>
+          <InitialPathPreRotate goal="{goal}"
+                                path="{path}"
+                                min_short_distance="0.30"
+                                max_short_distance="1.20"
+                                min_short_bearing="2.09439510239"
+                                min_path_length="1.20"
+                                circle_radius="0.51"
+                                min_path_bearing="0.24"
+                                robot_base_frame="base_link"
+                                spin_dist="{initial_spin_dist}"/>
+        </Inverter>
+        <Fallback name="SafeSpinOrNoShimDWB">
+          <Sequence name="SafeInitialSpin">
+            <SpinSafetyCheck safety_radius="0.51"
+                             lethal_cost="254"
+                             block_unknown="true"
+                             robot_base_frame="base_link"
+                             costmap_wait_timeout="1.0"/>
+            <Spin spin_dist="{initial_spin_dist}"/>
+            <SelectController controller_id="FollowPath" selected_controller="{selected_controller}"/>
+          </Sequence>
+          <SelectController controller_id="FollowPathNoShim" selected_controller="{selected_controller}"/>
+        </Fallback>
+      </Fallback>
+
+      <RecoveryNode number_of_retries="2" name="FollowPathWithMeasuredEscape">
         <FollowPath path="{path}" controller_id="{selected_controller}"/>
         <Sequence name="BoundedControllerRecovery">
           <IsPathValid path="{path}"/>
           <RoundRobin name="SafeEscapeActions">
-            <BackUp name="ShortBackUp" backup_dist="0.16" backup_speed="0.05"/>
-            <Sequence name="BackOutThenSmallTurn">
-              <BackUp name="BackUpBeforeTurn" backup_dist="0.12" backup_speed="0.05"/>
+            <!-- BackUp already performs footprint collision checking. The
+                 monitor additionally requires real odom displacement before
+                 the recovery is accepted. -->
+            <Sequence name="VerifiedBackOutAndReplan">
+              <Timeout msec="6000">
+                <Parallel success_threshold="2" failure_threshold="1">
+                  <BackUp name="ShortBackUp" backup_dist="0.16" backup_speed="0.05"/>
+                  <ReverseEscapeMonitor cmd_vel_topic="/cmd_vel_nav"
+                                        reverse_velocity_threshold="0.01"
+                                        stopped_velocity_threshold="0.005"
+                                        min_reverse_duration="0.30"
+                                        min_reverse_distance="0.08"
+                                        nonreverse_hold_time="0.20"
+                                        reverse_start_window="1.5"
+                                        fixed_frame="odom"
+                                        robot_base_frame="base_link"
+                                        completed="{reverse_escape_completed}"/>
+                </Parallel>
+              </Timeout>
+              <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}"/>
+              <SelectController controller_id="FollowPath" selected_controller="{selected_controller}"/>
+            </Sequence>
+            <Sequence name="CollisionCheckedSmallTurn">
+              <SpinSafetyCheck safety_radius="0.51"
+                               lethal_cost="254"
+                               block_unknown="true"
+                               robot_base_frame="base_link"
+                               costmap_wait_timeout="0.5"/>
               <Spin name="SmallEscapeTurn" spin_dist="0.20"/>
             </Sequence>
           </RoundRobin>

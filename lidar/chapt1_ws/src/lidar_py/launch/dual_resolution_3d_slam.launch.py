@@ -35,8 +35,8 @@ def generate_launch_description():
     navigation_launch = os.path.join(
         pkg_dir, "launch", "cartographer_auto_mapping_humble_launch.py")
     project_bt_dir = os.path.join(pkg_dir, "behavior_trees")
-    rpp_override = os.path.join(
-        pkg_dir, "config", "nav2_dual_3d_rpp_humble_override.yaml")
+    controller_override = os.path.join(
+        pkg_dir, "config", "nav2_dual_3d_dwb_humble_override.yaml")
     stvl_override = os.path.join(
         pkg_dir, "config", "nav2_dual_3d_stvl_override.yaml")
     camera_launch = os.path.join(
@@ -738,7 +738,7 @@ def generate_launch_description():
             "local_cloud_timeout_sec": "0.50",
             "require_local_cloud_alive": "true",
             "show_serial_window": "false",
-            "controller_override_file": rpp_override,
+            "controller_override_file": controller_override,
             "costmap_override_file": LaunchConfiguration(
                 "nav_costmap_override_file"),
             "bt_xml_file": os.path.join(

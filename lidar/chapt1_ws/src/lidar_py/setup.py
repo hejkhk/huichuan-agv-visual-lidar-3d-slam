@@ -48,6 +48,7 @@ setup(
           os.path.join('config', 'nav2_auto_mapping_humble.yaml'),
           os.path.join('config', 'nav2_dual_3d_rpp_override.yaml'),
           os.path.join('config', 'nav2_dual_3d_rpp_humble_override.yaml'),
+          os.path.join('config', 'nav2_dual_3d_dwb_humble_override.yaml'),
           os.path.join('config', 'nav2_dual_3d_stvl_override.yaml'),
           os.path.join('config', 'ekf_wheel_imu.yaml'),
           os.path.join('config', 'ekf_visual_wheel_imu.yaml'),

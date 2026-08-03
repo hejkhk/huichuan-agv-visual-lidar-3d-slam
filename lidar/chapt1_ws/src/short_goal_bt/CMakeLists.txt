@@ -6,7 +6,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
-find_package(behaviortree_cpp REQUIRED)
+find_package(behaviortree_cpp_v3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav2_behavior_tree REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -27,7 +27,7 @@ target_include_directories(short_goal_behind_bt_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 ament_target_dependencies(short_goal_behind_bt_node
-  behaviortree_cpp
+  behaviortree_cpp_v3
   geometry_msgs
   nav2_behavior_tree
   nav_msgs

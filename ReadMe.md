@@ -1318,3 +1318,22 @@ grep -E "COLLISION_GATE|VISUAL_LOOP_|CARTOGRAPHER_POSE_JUMP" \
 ```
 
 `VISUAL_LOOP_ACCEPTED`只表示 RTAB-Map内部3D图接受视觉回环。Cartographer仍是 `map -> odom`的唯一发布者，禁止手动把 RTAB-Map `publish_tf`改为 `true`。
+# 当前 Humble 导航配置（2026-08-04）
+
+Ubuntu 22.04 / ROS 2 Humble 的正式导航链路现为：
+
+```text
+SmacPlanner2D 全局规划
+  -> 1 Hz 有效期受限重规划
+  -> 自定义 C++ BT：后方目标预对向 / 完整车体旋转安全 / 实际倒车监控
+  -> RotationShim + DWB（正常）或 NoShim DWB（狭窄区回退）
+  -> velocity_smoother
+  -> 2D 雷达 + 3D STVL + 视觉墙 + C++ 最终碰撞门
+  -> /cmd_vel_safe -> STM32
+```
+
+默认控制器文件为 `config/nav2_dual_3d_dwb_humble_override.yaml`。旧的
+`nav2_dual_3d_rpp_humble_override.yaml` 继续保留为实车回退配置，但一键导航不再默认加载它。
+`short_goal_bt` 已按 Humble 的 `behaviortree_cpp_v3` 编译并由 `bt_navigator` 动态加载；
+禁止再放置 `COLCON_IGNORE`。Python 版 `three_level_recovery_nav.py` 不进入正式链路，避免直接
+发布 `/cmd_vel` 与 Nav2、安全仲裁争夺控制权。

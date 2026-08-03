@@ -160,7 +160,7 @@ RTABMAP_ODOM_TOPIC=/cartographer_pose_odom
 if is_true "$ENABLE_STVL"; then
   NAV_COSTMAP_OVERRIDE="$SOURCE_WS/src/lidar_py/config/nav2_dual_3d_stvl_override.yaml"
 else
-  # Perception fallback only: keep the same Smac/RPP controller chain and use
+  # Perception fallback only: keep the same Smac/DWB controller chain and use
   # the base 2D obstacle layers. Never revive the retired MPPI controller just
   # because STVL was disabled for diagnosis.
   NAV_COSTMAP_OVERRIDE="$SOURCE_WS/src/lidar_py/config/nav2_auto_mapping_humble.yaml"
@@ -417,7 +417,7 @@ wait_parameter_value() {
 
 verify_navigation_source_contract() {
   local controller_override
-  controller_override="$SOURCE_WS/src/lidar_py/config/nav2_dual_3d_rpp_humble_override.yaml"
+  controller_override="$SOURCE_WS/src/lidar_py/config/nav2_dual_3d_dwb_humble_override.yaml"
   python3 - "$NAV_COSTMAP_OVERRIDE" "$controller_override" "$ENABLE_STVL" <<'PY'
 import pathlib
 import sys
@@ -490,23 +490,29 @@ try:
         "FollowPath"]
     planner = controller["planner_server"]["ros__parameters"]["GridBased"]
 except (KeyError, TypeError) as exc:
-    raise SystemExit(f"RPP navigation parameter tree is incomplete: {exc}") from exc
+    raise SystemExit(f"DWB navigation parameter tree is incomplete: {exc}") from exc
 if planner.get("allow_unknown") is not False:
     raise SystemExit(
         "Smac must reject unknown space outside the observed map")
+if follow_path.get("plugin") != (
+        "nav2_rotation_shim_controller::RotationShimController"):
+    raise SystemExit("FollowPath must use the Humble RotationShim controller")
+if follow_path.get("primary_controller") != "dwb_core::DWBLocalPlanner":
+    raise SystemExit("FollowPath primary controller must be DWB")
+controller_params = controller["controller_server"]["ros__parameters"]
+no_shim = controller_params.get("FollowPathNoShim", {})
+if no_shim.get("plugin") != "dwb_core::DWBLocalPlanner":
+    raise SystemExit("FollowPathNoShim DWB fallback is missing")
 for key, expected in (
-        ("lookahead_dist", 0.40),
-        ("min_lookahead_dist", 0.30),
-        ("max_lookahead_dist", 0.58),
-        ("regulated_linear_scaling_min_speed", 0.07),
-        ("rotate_to_heading_min_angle", 1.05),
-        ("inflation_cost_scaling_factor", 14.0)):
+        ("max_vel_x", 0.20),
+        ("max_vel_theta", 0.209),
+        ("angular_dist_threshold", 2.80)):
     value = follow_path.get(key, -1.0)
     if abs(float(value) - expected) > 1e-6:
         raise SystemExit(
-            f"RPP {key} expected {expected}, got {value}")
-if not follow_path.get("use_cost_regulated_linear_velocity_scaling"):
-    raise SystemExit("RPP doorway cost regulation is disabled")
+            f"DWB/RotationShim {key} expected {expected}, got {value}")
+if float(no_shim.get("min_vel_x", 0.0)) >= 0.0:
+    raise SystemExit("FollowPathNoShim must retain bounded reverse sampling")
 PY
 }
 
@@ -618,7 +624,7 @@ for pkg in orbbec_camera cartographer_ros laser_filters rtabmap_slam rtabmap_rvi
   check_pkg "$pkg"
 done
 if is_true "$ENABLE_NAVIGATION"; then
-  for pkg in nav2_controller nav2_regulated_pure_pursuit_controller nav2_costmap_2d nav2_bt_navigator nav2_smac_planner nav2_velocity_smoother; do
+  for pkg in nav2_controller nav2_rotation_shim_controller dwb_core nav2_costmap_2d nav2_bt_navigator nav2_smac_planner nav2_velocity_smoother; do
     check_pkg "$pkg"
   done
   if is_true "$USE_RVIZ"; then
@@ -730,8 +736,9 @@ if is_true "$AUTO_BUILD" || [ ! -f "$INSTALL_BASE/setup.bash" ]; then
   if is_true "$ENABLE_NAVIGATION"; then
     build_paths+=(
       "$SOURCE_WS/src/frontier_exploration_ros2"
+      "$SOURCE_WS/src/short_goal_bt"
     )
-    build_packages+=(frontier_exploration_ros2)
+    build_packages+=(frontier_exploration_ros2 short_goal_bt)
   fi
   PYTHONNOUSERSITE=1 colcon --log-base "$LOG_BASE" build \
     --base-paths "${build_paths[@]}" \
@@ -751,6 +758,7 @@ LOCAL_CLOUD_BIN="$(ros2 pkg prefix local_depth_cloud_cpp)/lib/local_depth_cloud_
 grep -aFq "$LOCAL_CLOUD_PIPELINE_VERSION" "$LOCAL_CLOUD_BIN" || \
   die "C++ point-cloud node failed build-version check: expected $LOCAL_CLOUD_PIPELINE_VERSION"
 if is_true "$ENABLE_NAVIGATION"; then
+  check_pkg short_goal_bt
   COLLISION_GATE_BIN="$(ros2 pkg prefix local_depth_cloud_cpp)/lib/local_depth_cloud_cpp/local_cloud_collision_gate_node"
   [ -x "$COLLISION_GATE_BIN" ] || \
     die "C++ collision gate is missing after build: $COLLISION_GATE_BIN"
@@ -769,7 +777,7 @@ log "  2D authority    : Cartographer V13 + $CARTOGRAPHER_ODOM_TOPIC"
 log "  2D SLAM config  : $CARTOGRAPHER_CONFIG"
   log "  Global color 3D : RTAB-Map enabled=$ENABLE_RTABMAP, ${RTABMAP_RATE:-2.0} Hz"
   log "  RTAB auto-pause : ${RTABMAP_ON_DEMAND_PAUSE:-false} (false keeps loop closure alive)"
-log "  Navigation      : $ENABLE_NAVIGATION (SmacPlanner2D + Regulated Pure Pursuit)"
+log "  Navigation      : $ENABLE_NAVIGATION (SmacPlanner2D + safe DWB dual controller)"
 log "  Nav activation  : $(if is_true "$ENABLE_NAVIGATION"; then printf 'staged after sensor readiness'; else printf 'disabled'; fi)"
 log "  Dynamic 3D layer: STVL=${ENABLE_STVL:-true} (bounded recent + filtered RTAB walls)"
 log "  2D scan input   : /scan_timed_v2_filtered (filter=$ENABLE_FIXED_SCAN_FILTER)"

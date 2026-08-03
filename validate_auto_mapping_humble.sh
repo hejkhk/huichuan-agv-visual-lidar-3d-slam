@@ -34,7 +34,8 @@ required_packages=(
   laser_filters rtabmap_slam rtabmap_odom octomap_server \
   robot_localization nav2_controller nav2_planner nav2_bt_navigator \
   nav2_behaviors nav2_velocity_smoother nav2_smac_planner \
-  nav2_regulated_pure_pursuit_controller spatio_temporal_voxel_layer \
+  nav2_rotation_shim_controller dwb_core behaviortree_cpp_v3 \
+  spatio_temporal_voxel_layer \
   rmw_cyclonedds_cpp depth_image_proc robot_state_publisher xacro
 )
 if [ "${CAR_VALIDATION_SKIP_EXTERNAL:-0}" != "1" ]; then
@@ -47,13 +48,14 @@ for package in "${required_packages[@]}"; do
 done
 pass "Humble Cartographer/Nav2/RTAB-Map/STVL dependencies"
 
-[ -f "$ROOT_DIR/lidar/chapt1_ws/src/short_goal_bt/COLCON_IGNORE" ] ||
-  fail "Retired short_goal_bt must remain excluded from Humble workspace builds"
+[ ! -f "$ROOT_DIR/lidar/chapt1_ws/src/short_goal_bt/COLCON_IGNORE" ] ||
+  fail "Humble short_goal_bt is unexpectedly excluded from workspace builds"
 if colcon list --base-paths "$ROOT_DIR/lidar/chapt1_ws/src" 2>/dev/null | \
     awk '{print $1}' | grep -Fxq short_goal_bt; then
-  fail "Retired short_goal_bt is still discoverable by colcon"
+  pass "Humble BT.CPP v3 short_goal_bt is discoverable"
+else
+  fail "Humble short_goal_bt is not discoverable by colcon"
 fi
-pass "Retired BT.CPP plugin is excluded from full-workspace builds"
 
 declare -a BASELINE_HASHES=(
   "00dfd1c721f0fe8c61ac6f2b417001920694e4fc77e895fb4a1f194330c910d9:$LIDAR_SRC/config/cartographer_2d_v9_tightened.lua"
@@ -77,7 +79,7 @@ for file in \
   "$LIDAR_SRC/launch/cartographer_auto_mapping_humble_launch.py" \
   "$LIDAR_SRC/launch/dual_resolution_3d_slam.launch.py" \
   "$LIDAR_SRC/config/nav2_auto_mapping_humble.yaml" \
-  "$LIDAR_SRC/config/nav2_dual_3d_rpp_humble_override.yaml" \
+  "$LIDAR_SRC/config/nav2_dual_3d_dwb_humble_override.yaml" \
   "$LIDAR_SRC/config/nav2_dual_3d_stvl_override.yaml" \
   "$LIDAR_SRC/config/frontier_auto_mapping_humble.yaml" \
   "$LIDAR_SRC/behavior_trees/navigate_to_pose_humble.xml" \
@@ -101,13 +103,15 @@ def load_yaml(name):
     return data
 
 nav = load_yaml("nav2_auto_mapping_humble.yaml")
-rpp = load_yaml("nav2_dual_3d_rpp_humble_override.yaml")
+dwb = load_yaml("nav2_dual_3d_dwb_humble_override.yaml")
 stvl = load_yaml("nav2_dual_3d_stvl_override.yaml")
 load_yaml("frontier_auto_mapping_humble.yaml")
 
 bt = nav["bt_navigator"]["ros__parameters"]
 if not bt.get("plugin_lib_names"):
     raise SystemExit("Humble bt_navigator.plugin_lib_names is required")
+if "short_goal_behind_bt_node" not in bt["plugin_lib_names"]:
+    raise SystemExit("Humble custom short-goal BT plugin is not loaded")
 
 expected_costmap_plugins = {
     "obstacle_layer": "nav2_costmap_2d::ObstacleLayer",
@@ -146,7 +150,7 @@ waypoint = nav["waypoint_follower"]["ros__parameters"]["wait_at_waypoint"]
 if waypoint.get("plugin") != "nav2_waypoint_follower::WaitAtWaypoint":
     raise SystemExit("invalid Humble waypoint executor plugin name")
 
-controller = rpp["controller_server"]["ros__parameters"]
+controller = dwb["controller_server"]["ros__parameters"]
 if controller.get("progress_checker_plugin") != "progress_checker":
     raise SystemExit("Humble requires singular progress_checker_plugin")
 if "progress_checker_plugins" in controller:
@@ -154,19 +158,18 @@ if "progress_checker_plugins" in controller:
 if controller["progress_checker"].get("plugin") != "nav2_controller::SimpleProgressChecker":
     raise SystemExit("Humble SimpleProgressChecker is not selected")
 follow = controller["FollowPath"]
-if follow.get("plugin") != (
-        "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"):
-    raise SystemExit("invalid Humble RPP plugin name")
-unsupported = {
-    "use_fixed_curvature_lookahead", "curvature_lookahead_dist",
-    "interpolate_curvature_after_goal", "stateful",
-}
-leaked = unsupported.intersection(follow)
-if leaked:
-    raise SystemExit(f"post-Humble RPP parameters present: {sorted(leaked)}")
-if follow.get("desired_linear_vel") != 0.20:
+if follow.get("plugin") != "nav2_rotation_shim_controller::RotationShimController":
+    raise SystemExit("invalid Humble RotationShim plugin name")
+if follow.get("primary_controller") != "dwb_core::DWBLocalPlanner":
+    raise SystemExit("FollowPath does not wrap DWB")
+no_shim = controller.get("FollowPathNoShim", {})
+if no_shim.get("plugin") != "dwb_core::DWBLocalPlanner":
+    raise SystemExit("NoShim DWB controller is missing")
+if follow.get("max_vel_x") != 0.20:
     raise SystemExit("navigation gear-2 velocity changed")
-planner = rpp["planner_server"]["ros__parameters"]["GridBased"]
+if no_shim.get("min_vel_x", 0.0) >= 0.0:
+    raise SystemExit("NoShim controller lost bounded reverse sampling")
+planner = dwb["planner_server"]["ros__parameters"]["GridBased"]
 if planner.get("plugin") != "nav2_smac_planner/SmacPlanner2D":
     raise SystemExit("Humble SmacPlanner2D plugin name is invalid")
 if planner.get("allow_unknown") is not False:
@@ -181,7 +184,7 @@ for costmap_name in ("local_costmap", "global_costmap"):
     if params["static_layer"].get("footprint_clearing_enabled") is not True:
         raise SystemExit(
             f"{costmap_name} must clear stale static cells below the robot footprint")
-    inflation = rpp[costmap_name][costmap_name]["ros__parameters"]["inflation_layer"]
+    inflation = dwb[costmap_name][costmap_name]["ros__parameters"]["inflation_layer"]
     if inflation.get("inflation_radius") != 0.49:
         raise SystemExit(f"{costmap_name} inflation radius changed")
 
@@ -193,12 +196,19 @@ for name in ("navigate_to_pose_humble.xml", "navigate_through_poses_humble.xml")
     for forbidden in ("error_code_id=", "WouldAPlannerRecoveryHelp", "WouldAControllerRecoveryHelp"):
         if forbidden in text:
             raise SystemExit(f"Jazzy BT port/node leaked into {name}: {forbidden}")
+    if name == "navigate_to_pose_humble.xml":
+        for required in (
+                "InitialPathPreRotate", "SpinSafetyCheck", "SelectController",
+                "ReverseEscapeMonitor", "FollowPathNoShim"):
+            if required not in text:
+                raise SystemExit(f"custom Humble navigation behavior missing: {required}")
 
 dual = (root / "launch" / "dual_resolution_3d_slam.launch.py").read_text(encoding="utf-8")
 for required in (
     "cartographer_auto_mapping_humble_launch.py",
     "navigate_to_pose_humble.xml",
     "navigate_through_poses_humble.xml",
+    "nav2_dual_3d_dwb_humble_override.yaml",
 ):
     if required not in dual:
         raise SystemExit(f"dual-resolution launch does not select {required}")
@@ -244,7 +254,7 @@ if [ "${1:-}" = "--build" ]; then
   "$SYSTEM_PYTHON" -I - \
     "$LIDAR_SRC/config/nav2_auto_mapping_humble.yaml" \
     "$LIDAR_SRC/config/nav2_dual_3d_stvl_override.yaml" \
-    "$LIDAR_SRC/config/nav2_dual_3d_rpp_humble_override.yaml" \
+    "$LIDAR_SRC/config/nav2_dual_3d_dwb_humble_override.yaml" \
     "$MERGED_PARAMS" <<'PY'
 import copy
 import pathlib
