@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: humble-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-validate:
     runs-on: ubuntu-22.04
