@@ -30,12 +30,19 @@ done
 "$SYSTEM_PYTHON" -I -c 'import em, lark, yaml' >/dev/null 2>&1 ||
   fail "Install python3-empy python3-lark python3-yaml"
 
-for package in \
-  cartographer_ros laser_filters rtabmap_slam rtabmap_odom octomap_server \
+required_packages=(
+  laser_filters rtabmap_slam rtabmap_odom octomap_server \
   robot_localization nav2_controller nav2_planner nav2_bt_navigator \
   nav2_behaviors nav2_velocity_smoother nav2_smac_planner \
   nav2_regulated_pure_pursuit_controller spatio_temporal_voxel_layer \
-  rmw_cyclonedds_cpp depth_image_proc robot_state_publisher xacro; do
+  rmw_cyclonedds_cpp depth_image_proc robot_state_publisher xacro
+)
+if [ "${CAR_VALIDATION_SKIP_EXTERNAL:-0}" != "1" ]; then
+  required_packages+=(cartographer_ros)
+else
+  echo "[WARN] CI-only mode: external Cartographer/Orbbec runtime checks skipped."
+fi
+for package in "${required_packages[@]}"; do
   ros2 pkg prefix "$package" >/dev/null 2>&1 || fail "Missing ROS package: $package"
 done
 pass "Humble Cartographer/Nav2/RTAB-Map/STVL dependencies"

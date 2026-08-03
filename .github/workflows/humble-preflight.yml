@@ -15,6 +15,10 @@ jobs:
       ROS_DISTRO: humble
       CAR_HUMBLE_BUILD_ROOT: /tmp/huichuan_agv_humble_ws
       CAR_VALIDATION_ROS_DOMAIN_ID: "187"
+      # Hardware/vendor packages are validated on the robot. The hosted runner
+      # has no Orbbec apt package and currently has a Cartographer libunwind
+      # resolver conflict, neither of which is needed to compile our packages.
+      CAR_VALIDATION_SKIP_EXTERNAL: "1"
 
     steps:
       - name: Check out source
@@ -38,7 +42,8 @@ jobs:
             python3-yaml
           rosdep update
           rosdep install --from-paths "lidar/chapt1_ws/src" \
-            --ignore-src --rosdistro humble -r -y
+            --ignore-src --rosdistro humble -r -y \
+            --skip-keys "orbbec_camera cartographer_ros"
 
       - name: Build and validate Humble stack
         shell: bash
