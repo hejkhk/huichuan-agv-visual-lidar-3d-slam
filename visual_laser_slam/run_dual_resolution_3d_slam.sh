@@ -351,6 +351,51 @@ reset_cached_package() {
   done
 }
 
+prepare_humble_build_cache() {
+  local source_root="$1"
+  local marker="$CACHE_WS/.humble-build-environment-v2"
+  local ubuntu_version="unknown"
+  local python_path="${CAR_SYSTEM_PYTHON:-/usr/bin/python3}"
+  local python_version="unknown"
+  local source_path="unknown"
+  local source_revision="unknown"
+  local expected="" previous="" path=""
+
+  [ -n "$CACHE_WS" ] && [ "$CACHE_WS" != "/" ] || \
+    die "Refusing to use an invalid build cache root: ${CACHE_WS:-<empty>}"
+  source_path="$(readlink -f "$source_root" 2>/dev/null || true)"
+  [ -n "$source_path" ] || die "Cannot resolve build source: $source_root"
+  if [ -r /etc/os-release ]; then
+    ubuntu_version="$(. /etc/os-release; printf '%s:%s' "${ID:-unknown}" "${VERSION_ID:-unknown}")"
+  fi
+  [ -x "$python_path" ] || die "System Python is unavailable: $python_path"
+  python_version="$($python_path -c 'import platform; print(platform.python_version())')"
+  source_revision="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || printf 'no-git')"
+  expected="schema=humble-v2
+ros=humble
+os=$ubuntu_version
+python=$python_path:$python_version
+source=$source_path
+revision=$source_revision"
+
+  [ -f "$marker" ] && previous="$(cat "$marker")"
+  if [ "$previous" != "$expected" ]; then
+    if [ -n "$previous" ]; then
+      log "[build] Humble build environment changed; invalidating stale cache."
+    else
+      log "[build] Initializing the Humble build-cache contract."
+    fi
+    for path in "$BUILD_BASE" "$INSTALL_BASE" "$LOG_BASE"; do
+      case "$path" in
+        "$CACHE_WS"/*) rm -rf -- "$path" ;;
+        *) die "Refusing to clean path outside build cache: $path" ;;
+      esac
+    done
+    mkdir -p "$CACHE_WS"
+    printf '%s\n' "$expected" >"$marker"
+  fi
+}
+
 wait_parameter_value() {
   local node="$1" parameter="$2" expected="$3" timeout_sec="${4:-30}"
   local failure_level="${5:-ERROR}"
@@ -557,6 +602,7 @@ export RCUTILS_LOGGING_BUFFERED_STREAM=1
 command -v ros2 >/dev/null 2>&1 || die "ros2 is unavailable"
 command -v colcon >/dev/null 2>&1 || die "colcon is unavailable"
 command -v setsid >/dev/null 2>&1 || die "setsid is unavailable"
+prepare_humble_build_cache "$SOURCE_WS/src"
 
 # A daemon started by an earlier run does not inherit this launcher's DDS
 # profile. Restart it before any graph query so stale participant-index state

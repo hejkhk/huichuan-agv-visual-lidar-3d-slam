@@ -4079,3 +4079,11 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
 - Humble GitHub 预检除 YAML/XML/Bash/Python 语法和 `colcon` 编译外，还会依次将 Controller、Planner、
   Behavior Server 与 BT Navigator 转换到 lifecycle `configure`，直接捕获错误的 pluginlib 类名。
 - 保留 Cartographer V13 Lua、雷达滤波、NAVI 里程计、IMU 和 STM32 通讯链，不修改稳定建图基线。
+# 2026-08-03 V6.48: Humble 构建缓存与行为树编译修复
+
+- 确认 `short_goal_bt` 是旧版自定义 BehaviorTree.CPP 插件，当前 Humble 导航树没有引用其中任何节点。
+- 该旧包依赖名和 C++ API 来自另一版 BehaviorTree.CPP；执行全工作区 `colcon build` 时会被自动发现并造成行为树编译失败。现通过 `COLCON_IGNORE` 明确退出构建，不删除源码，便于追溯。
+- `open_all.sh` 与 `visual_laser_slam/run_dual_resolution_3d_slam.sh` 新增构建环境指纹，记录 Ubuntu、ROS 发行版、系统 Python、源码绝对路径和 Git 提交。
+- 指纹变化时仅清理各自 `~/.cache/huichuan_*_humble_ws` 下的 `build/install/log`，不会删除项目、RTAB-Map 数据库、地图或标定文件。
+- `validate_auto_mapping_humble.sh` 新增 colcon 包发现检查，保证旧行为树插件不会混入 Humble 全工作区；Nav2 生命周期测试显式加载项目实际使用的两个 Humble XML 行为树路径。
+- GitHub Actions 继续在 Ubuntu 22.04 + ROS 2 Humble 上构建和验证。此改动不修改 Cartographer 稳定建图参数、STM32、车体尺寸、导航速度、代价地图或避障参数。

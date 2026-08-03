@@ -113,6 +113,51 @@ is_true() {
     esac
 }
 
+prepare_humble_build_cache() {
+    local source_root="$1"
+    local marker="$ASCII_WS_BASE/.humble-build-environment-v2"
+    local ubuntu_version="unknown"
+    local python_version="unknown"
+    local source_path="unknown"
+    local source_revision="unknown"
+    local expected=""
+    local previous=""
+    local path=""
+
+    [ -n "$ASCII_WS_BASE" ] && [ "$ASCII_WS_BASE" != "/" ] ||
+        die "Refusing to use an invalid build cache root: ${ASCII_WS_BASE:-<empty>}"
+    source_path="$(readlink -f "$source_root" 2>/dev/null || true)"
+    [ -n "$source_path" ] || die "Cannot resolve build source: $source_root"
+    if [ -r /etc/os-release ]; then
+        ubuntu_version="$(. /etc/os-release; printf '%s:%s' "${ID:-unknown}" "${VERSION_ID:-unknown}")"
+    fi
+    python_version="$($SYSTEM_PYTHON -c 'import platform; print(platform.python_version())')"
+    source_revision="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || printf 'no-git')"
+    expected="schema=humble-v2
+ros=humble
+os=$ubuntu_version
+python=$SYSTEM_PYTHON:$python_version
+source=$source_path
+revision=$source_revision"
+
+    [ -f "$marker" ] && previous="$(cat "$marker")"
+    if [ "$previous" != "$expected" ]; then
+        if [ -n "$previous" ]; then
+            log "[build] Humble build environment changed; invalidating stale cache."
+        else
+            log "[build] Initializing the Humble build-cache contract."
+        fi
+        for path in "$AUTO_BUILD_BASE" "$AUTO_INSTALL_BASE" "$AUTO_LOG_BASE"; do
+            case "$path" in
+                "$ASCII_WS_BASE"/*) rm -rf -- "$path" ;;
+                *) die "Refusing to clean path outside build cache: $path" ;;
+            esac
+        done
+        mkdir -p "$ASCII_WS_BASE"
+        printf '%s\n' "$expected" >"$marker"
+    fi
+}
+
 hard_timeout() {
     local duration="$1"
     shift
@@ -1022,6 +1067,7 @@ check_humble_build_dependencies
 PYTHON_USER_SITE="$("$SYSTEM_PYTHON" -c 'import site; print(site.getusersitepackages())')"
 
 mkdir -p "$ASCII_WS_BASE"
+prepare_humble_build_cache "$LIDAR_WS/src"
 if [ -L "$ASCII_SRC_LINK" ]; then
     rm -f "$ASCII_SRC_LINK"
 elif [ -e "$ASCII_SRC_LINK" ]; then

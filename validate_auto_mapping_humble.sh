@@ -47,6 +47,14 @@ for package in "${required_packages[@]}"; do
 done
 pass "Humble Cartographer/Nav2/RTAB-Map/STVL dependencies"
 
+[ -f "$ROOT_DIR/lidar/chapt1_ws/src/short_goal_bt/COLCON_IGNORE" ] ||
+  fail "Retired short_goal_bt must remain excluded from Humble workspace builds"
+if colcon list --base-paths "$ROOT_DIR/lidar/chapt1_ws/src" 2>/dev/null | \
+    awk '{print $1}' | grep -Fxq short_goal_bt; then
+  fail "Retired short_goal_bt is still discoverable by colcon"
+fi
+pass "Retired BT.CPP plugin is excluded from full-workspace builds"
+
 declare -a BASELINE_HASHES=(
   "00dfd1c721f0fe8c61ac6f2b417001920694e4fc77e895fb4a1f194330c910d9:$LIDAR_SRC/config/cartographer_2d_v9_tightened.lua"
   "0571d9810aa44b32ecb7e283fcf035f83089de824ce2ec2a6530a6cdcbb26c4f:$LIDAR_SRC/launch/cartographer_scan_v2_launch.py"
@@ -256,6 +264,12 @@ for source in sys.argv[1:-1]:
     with pathlib.Path(source).open(encoding="utf-8") as stream:
         merged = merge(merged, yaml.safe_load(stream) or {})
 with pathlib.Path(sys.argv[-1]).open("w", encoding="utf-8") as stream:
+    bt_dir = pathlib.Path(sys.argv[1]).parent.parent / "behavior_trees"
+    merged.setdefault("bt_navigator", {}).setdefault("ros__parameters", {}).update({
+        "default_nav_to_pose_bt_xml": str(bt_dir / "navigate_to_pose_humble.xml"),
+        "default_nav_through_poses_bt_xml": str(
+            bt_dir / "navigate_through_poses_humble.xml"),
+    })
     yaml.safe_dump(merged, stream, sort_keys=False)
 PY
 
