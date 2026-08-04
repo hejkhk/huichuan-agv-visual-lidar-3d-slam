@@ -1,0 +1,20 @@
+
+
+===== start web server =====
+web_dir=/home/hejkhk/huichuan-agv-ros2-foxy-visual-lidar-slam-step/huichuan-agv-ros2-foxy-main/web
+node=node
+
+  VITE v6.4.3  ready in 153 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: http://192.168.1.6:5173/
+
+
+===== start web server =====
+web_dir=/home/hejkhk/huichuan-agv-ros2-foxy-visual-lidar-slam-step/huichuan-agv-ros2-foxy-main/web
+node=node
+
+  VITE v6.4.3  ready in 117 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: http://192.168.1.6:5173/

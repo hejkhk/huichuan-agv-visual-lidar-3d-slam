@@ -1,0 +1,62 @@
+<!-- Differential-drive navigation with bounded, collision-aware recovery. -->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <PipelineSequence name="NavigateWithStableReplanning">
+      <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
+      <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
+
+      <!-- Nav2's normal pipeline replans at 1 Hz. A collision-free path is
+           retained for three seconds to avoid nearly identical routes
+           alternating at a doorway. There is no behavior-server Wait action:
+           planner retries can no longer consume the whole navigation task. -->
+      <RateController hz="1.0">
+        <Fallback name="KeepOrComputeCollisionCheckedPath">
+          <ReactiveSequence name="KeepFreshValidPath">
+            <Inverter>
+              <PathExpiringTimer seconds="3.0" path="{path}"/>
+            </Inverter>
+            <Inverter>
+              <GlobalUpdatedGoal/>
+            </Inverter>
+            <IsPathValid path="{path}"/>
+          </ReactiveSequence>
+
+          <!-- Retry a transient planner error twice without moving, clearing
+               costmaps, or starting a recovery behavior. -->
+          <RecoveryNode number_of_retries="2" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
+            <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
+          </RecoveryNode>
+
+          <!-- A failed refresh may keep the previous path only when it is
+               still collision-valid and the goal has not changed. -->
+          <ReactiveSequence name="RetainValidPathAfterTransientPlannerFailure">
+            <Inverter>
+              <GlobalUpdatedGoal/>
+            </Inverter>
+            <IsPathValid path="{path}"/>
+          </ReactiveSequence>
+        </Fallback>
+      </RateController>
+
+      <!-- Physical escape is reserved for a real controller failure on a path
+           that is still valid. Two short actions replace the old unbounded
+           reverse/wait/spin loop. Nav2's BackUp and Spin actions perform their
+           own footprint collision checks. -->
+      <RecoveryNode number_of_retries="2" name="FollowPath">
+        <FollowPath path="{path}" controller_id="{selected_controller}" error_code_id="{follow_path_error_code}"/>
+        <Sequence name="BoundedControllerRecovery">
+          <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
+          <IsPathValid path="{path}"/>
+          <RoundRobin name="SafeEscapeActions">
+            <BackUp name="ShortBackUp" backup_dist="0.16" backup_speed="0.05" time_allowance="5.0" error_code_id="{backup_error_code}"/>
+            <Sequence name="BackOutThenSmallTurn">
+              <BackUp name="BackUpBeforeTurn" backup_dist="0.12" backup_speed="0.05" time_allowance="5.0" error_code_id="{backup_error_code}"/>
+              <Spin name="SmallEscapeTurn" spin_dist="0.20" time_allowance="6.0" error_code_id="{spin_error_code}"/>
+            </Sequence>
+          </RoundRobin>
+        </Sequence>
+      </RecoveryNode>
+    </PipelineSequence>
+  </BehaviorTree>
+</root>

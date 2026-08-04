@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>short_goal_bt</name>
+  <version>0.1.0</version>
+  <description>BT conditions for one-shot pre-rotation toward short rear goals and long global paths.</description>
+  <maintainer email="cyn@example.com">cyn</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>behaviortree_cpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav2_behavior_tree</depend>
+  <depend>nav_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>tf2</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,309 @@
+# MPPI override for the dual 2D/3D branch.
+# Base planner/costmap/BT parameters remain in nav2_auto_mapping_jazzy.yaml.
+controller_server:
+  ros__parameters:
+    # Match the measured 12-15 Hz perception pipeline. The previous 20 Hz
+    # target repeatedly collapsed to 3-5 Hz under MPPI/RTAB-Map CPU load.
+    controller_frequency: 15.0
+    failure_tolerance: 0.5
+    # Jazzy supports both Twist and TwistStamped. Keep the controller,
+    # velocity smoother and the existing safety arbiter on the same Twist API.
+    enable_stamped_cmd_vel: false
+    controller_plugins: ["FollowPath"]
+    progress_checker_plugins: ["progress_checker"]
+
+    # SimpleProgressChecker only observes translation. A valid in-place
+    # heading correction was therefore aborted after 30 s and recovery sent
+    # the chassis back the other way. PoseProgressChecker accepts either
+    # 5 cm translation or about 6 degrees of genuine angular progress.
+    progress_checker:
+      plugin: "nav2_controller::PoseProgressChecker"
+      required_movement_radius: 0.05
+      required_movement_angle: 0.10
+      movement_time_allowance: 20.0
+
+    FollowPath:
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_mppi_controller::MPPIController"
+      # Let DiffDrive MPPI handle ordinary side/rear-side goals as continuous
+      # moving arcs. The 1.20 rad threshold forced both goals in the V6.21
+      # test into an in-place turn while the 0.52 m swept-circle guard was
+      # correctly blocked by nearby walls, so the controller only emitted
+      # zero. Reserve the shim for a target that is almost directly behind.
+      angular_dist_threshold: 2.80
+      angular_disengage_threshold: 0.25
+      forward_sampling_distance: 0.30
+      rotate_to_heading_angular_vel: 0.14
+      max_angular_accel: 0.50
+      simulate_ahead_time: 2.0
+      closed_loop: true
+      rotate_to_goal_heading: false
+      rotate_to_heading_once: true
+      use_path_orientations: false
+      motion_model: "DiffDrive"
+      # At 15 Hz the controller period is 0.0667 s. Jazzy requires model_dt
+      # to be no shorter than that period, so round upward to 0.067 s.
+      time_steps: 42
+      model_dt: 0.067
+      # Nav2 MPPI is CPU based; the RTX 3060 does not accelerate this loop.
+      # 800 samples retain a 2.8 s horizon while leaving time for the 3D stack.
+      batch_size: 800
+      iteration_count: 1
+      # Explore enough forward velocity to avoid converging on the real
+      # chassis' ineffective 1-2 cm/s command range.
+      vx_std: 0.14
+      vy_std: 0.0
+      wz_std: 0.18
+      vx_max: 0.20
+      # The lattice is forward-only. Do not let MPPI generate millimetre-scale
+      # reverse commands that the real chassis cannot execute.
+      vx_min: 0.0
+      vy_max: 0.0
+      # Slip-compensated second gear: 12.5 deg/s commanded. With the measured
+      # four-wheel skid-steer understeer this targets about 0.85 m real radius.
+      wz_max: 0.220
+      ax_max: 0.50
+      ax_min: -0.50
+      az_max: 1.20
+      # Select useful trajectories more decisively. A lower value than 0.20
+      # made command changes abrupt in this heavy 3D stack.
+      temperature: 0.25
+      gamma: 0.015
+      prune_distance: 1.5
+      transform_tolerance: 0.30
+      # Reusing the sampling distribution removes control-to-control random
+      # command chatter while reset() still refreshes it for a new task.
+      regenerate_noises: false
+      visualize: false
+      retry_attempt_limit: 1
+      critics:
+        - ConstraintCritic
+        - CostCritic
+        - GoalCritic
+        - GoalAngleCritic
+        - PathAlignCritic
+        - PathFollowCritic
+        - PathAngleCritic
+        - PreferForwardCritic
+        - TwirlingCritic
+        - VelocityDeadbandCritic
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        # Hard footprint collisions still use collision_cost below. Lower only
+        # the soft outer-inflation penalty that caused long 0.02 m/s crawls.
+        cost_weight: 3.5
+        critical_cost: 300.0
+        near_collision_cost: 253
+        collision_cost: 1000000.0
+        consider_footprint: true
+        near_goal_distance: 0.8
+        trajectory_point_step: 2
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 7.0
+        threshold_to_consider: 0.60
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+        threshold_to_consider: 0.30
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 16.0
+        max_path_occupancy_ratio: 0.10
+        trajectory_point_step: 4
+        threshold_to_consider: 0.35
+        offset_from_furthest: 12
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        # Keep rewarding actual path progress until the final 45 cm. The old
+        # 1.2 m threshold disabled this critic for the entire 0.96 m test.
+        cost_weight: 14.0
+        offset_from_furthest: 8
+        threshold_to_consider: 0.45
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 8.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.35
+        max_angle_to_furthest: 1.0
+        mode: 0
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 9.0
+        threshold_to_consider: 0.35
+      TwirlingCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 12.0
+      VelocityDeadbandCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 60.0
+        # Values below these real chassis deadbands create repeated command
+        # chatter without useful motion.
+        deadband_velocities: [0.05, 0.0, 0.08]
+
+# SmacPlanner2D produces a collision-free grid path. This fast smoother removes
+# cell-to-cell corners without imposing an Ackermann turning radius on a
+# differential-drive chassis. The BT collision-checks every smoothed result.
+smoother_server:
+  ros__parameters:
+    costmap_topic: global_costmap/costmap_raw
+    footprint_topic: global_costmap/published_footprint
+    robot_base_frame: base_link
+    transform_tolerance: 0.30
+    smoother_plugins: ["SmoothPath"]
+    SmoothPath:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-8
+      do_refinement: true
+      refinement_num: 2
+      max_its: 500
+      w_data: 0.35
+      w_smooth: 0.25
+      enforce_path_inversion: false
+
+# Controller and recovery commands enter here first. Closed-loop interpolation
+# limits wheel shock and preserves v/w curvature while publishing at 30 Hz.
+velocity_smoother:
+  ros__parameters:
+    smoothing_frequency: 30.0
+    scale_velocities: true
+    feedback: "CLOSED_LOOP"
+    max_velocity: [0.20, 0.0, 0.25]
+    min_velocity: [-0.08, 0.0, -0.25]
+    # Do not silently turn a valid MPPI command into (0, 0). The chassis
+    # deadband critic and safety arbiter already handle ineffective velocities.
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 0.50
+    max_accel: [0.35, 0.0, 0.50]
+    max_decel: [-0.50, 0.0, -0.70]
+    odom_topic: /odom
+    odom_duration: 0.10
+    use_realtime_priority: false
+    enable_stamped_cmd_vel: false
+    stamp_smoothed_velocity_with_smoothing_time: false
+
+behavior_server:
+  ros__parameters:
+    cycle_frequency: 10.0
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_link
+    transform_tolerance: 0.30
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 0.18
+    min_rotational_vel: 0.08
+    rotational_acc_lim: 0.50
+
+# This costmap override is loaded only by START_DUAL_2D_3D_NAVIGATION.sh.
+# The shared Nav2 profile keeps its validated legacy depth scan unchanged.
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 10.0
+      publish_frequency: 5.0
+      footprint_padding: 0.02
+      plugins: ["obstacle_layer", "depth_voxel_layer", "inflation_layer"]
+      obstacle_layer:
+        observation_sources: scan
+        scan:
+          topic: /scan_timed_v2_filtered
+      inflation_layer:
+        cost_scaling_factor: 6.0
+        inflation_radius: 0.52
+      depth_voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: true
+        footprint_clearing_enabled: true
+        publish_voxel_map: true
+        origin_z: -0.20
+        z_resolution: 0.10
+        z_voxels: 16
+        max_obstacle_height: 1.40
+        # Ground residuals and isolated speckles are removed upstream. A single
+        # occupied column must remain sufficient for real 2 cm low obstacles.
+        mark_threshold: 1
+        unknown_threshold: 31
+        observation_sources: gemini2_local
+        gemini2_local:
+          # Preserve the optical frame so clearing rays start at the camera.
+          topic: /local_highres_cloud_v21/sensor
+          data_type: "PointCloud2"
+          marking: true
+          clearing: true
+          obstacle_min_range: 0.15
+          obstacle_max_range: 3.50
+          raytrace_min_range: 0.15
+          raytrace_max_range: 4.00
+          # The calibrated floor branch removes only the first 2 cm. Preserve
+          # obstacles above that instead of using the old 8 cm blind band.
+          min_obstacle_height: 0.02
+          max_obstacle_height: 1.40
+          # The measured stream is 12-15 Hz with occasional 0.25-0.39 s gaps.
+          # Freshness is enforced by safety_fusion_node's 0.35 s watchdog.
+          expected_update_rate: 0.0
+          observation_persistence: 0.0
+
+# Four-wheel differential steering is not a car-like Ackermann chassis. Smac
+# 2D supplies a direct collision-free centre path; MPPI's DiffDrive model owns
+# moving arcs and in-place heading changes without forcing a Dubin detour.
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 2.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_smac_planner/SmacPlanner2D"
+      tolerance: 0.25
+      downsample_costmap: false
+      downsampling_factor: 1
+      allow_unknown: true
+      max_iterations: 250000
+      max_on_approach_iterations: 1000
+      max_planning_time: 2.0
+      cost_travel_multiplier: 2.0
+      use_final_approach_orientation: false
+      smooth_path: true
+      smoother:
+        max_iterations: 300
+        w_smooth: 0.15
+        w_data: 0.45
+        tolerance: 1.0e-8
+        do_refinement: true
+        refinement_num: 2
+
+# Global planning uses the stable Cartographer map and 2D scan sources. The
+# live Gemini2 cloud stays in local_costmap for MPPI collision avoidance; using
+# the same floor-sensitive cloud globally caused routes around empty floor and
+# doubled point-cloud processing load.
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      # Global replanning only needs a 2 Hz dynamic projection. Local STVL and
+      # the C++ collision gate remain at sensor rate for immediate avoidance.
+      update_frequency: 2.0
+      publish_frequency: 1.0
+      footprint_padding: 0.02
+      plugins:
+        - static_layer
+        - obstacle_layer
+        - inflation_layer
+      obstacle_layer:
+        observation_sources: scan
+        scan:
+          topic: /scan_timed_v2_filtered
+      inflation_layer:
+        cost_scaling_factor: 6.0
+        inflation_radius: 0.52

@@ -1,0 +1,16 @@
+# Build artifacts
+lidar/chapt1_ws/build/
+lidar/chapt1_ws/install/
+lidar/chapt1_ws/log/
+
+# Cache build
+.cache/
+__pycache__/
+*.pyc
+
+# Logs
+SLAM_Log/
+
+# OS
+.DS_Store
+Thumbs.db

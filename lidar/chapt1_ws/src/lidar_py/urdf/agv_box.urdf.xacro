@@ -1,0 +1,85 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="huichuan_agv">
+  <xacro:arg name="camera_x" default="0.30"/>
+  <xacro:arg name="camera_y" default="0.0"/>
+  <xacro:arg name="camera_z" default="0.371"/>
+  <xacro:arg name="camera_roll" default="0.0"/>
+  <xacro:arg name="camera_pitch" default="0.437"/>
+  <xacro:arg name="camera_yaw" default="0.0"/>
+  <xacro:arg name="lidar_x" default="0.20"/>
+  <xacro:arg name="lidar_y" default="0.0"/>
+  <xacro:arg name="lidar_z" default="0.4235"/>
+
+  <material name="chassis_cyan">
+    <color rgba="0.03 0.55 0.61 0.82"/>
+  </material>
+  <material name="sensor_dark">
+    <color rgba="0.08 0.10 0.12 1.0"/>
+  </material>
+  <material name="camera_blue">
+    <color rgba="0.12 0.32 0.72 1.0"/>
+  </material>
+
+  <!-- Existing odometry defines base_link on the ground at chassis centre. -->
+  <link name="base_link"/>
+
+  <link name="chassis_body_link">
+    <visual>
+      <geometry>
+        <box size="0.665 0.665 0.321"/>
+      </geometry>
+      <material name="chassis_cyan"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.665 0.665 0.321"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="base_to_chassis_body" type="fixed">
+    <parent link="base_link"/>
+    <child link="chassis_body_link"/>
+    <origin xyz="0 0 0.1605" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Visual/collision companion of the functional laser_frame TF. -->
+  <link name="lidar_model_link">
+    <visual>
+      <geometry>
+        <cylinder radius="0.040" length="0.040"/>
+      </geometry>
+      <material name="sensor_dark"/>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="0.040" length="0.040"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="base_to_lidar_model" type="fixed">
+    <parent link="base_link"/>
+    <child link="lidar_model_link"/>
+    <origin xyz="$(arg lidar_x) $(arg lidar_y) $(arg lidar_z)" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Visual/collision companion of the functional camera_link TF. -->
+  <link name="camera_model_link">
+    <visual>
+      <geometry>
+        <box size="0.045 0.105 0.030"/>
+      </geometry>
+      <material name="camera_blue"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.045 0.105 0.030"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="base_to_camera_model" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_model_link"/>
+    <origin xyz="$(arg camera_x) $(arg camera_y) $(arg camera_z)"
+            rpy="$(arg camera_roll) $(arg camera_pitch) $(arg camera_yaw)"/>
+  </joint>
+</robot>

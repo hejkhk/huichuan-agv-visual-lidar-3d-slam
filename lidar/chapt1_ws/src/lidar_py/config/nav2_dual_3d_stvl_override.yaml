@@ -1,0 +1,211 @@
+# Gemini2 obstacle memory for Nav2 uses one bounded, geometry-filtered layer.
+# Three-frame confirmation rejects transient depth noise, while finite decay
+# prevents floor artifacts from becoming permanent lethal cost. Cartographer's
+# static map retains global structure, while RTAB-Map's filtered vertical walls
+# are used only by the local controller for camera blind-zone protection.
+# The single-frame cloud remains outside STVL as the hard collision-stop input.
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      # Cartographer publishes occupancy probabilities, not a binary 0/100
+      # wall image. Nav2's default lethal threshold of 100 can therefore
+      # discard real but sub-maximal wall cells. Use the same 65% occupied
+      # convention as map saving, and never let a later sensor layer erase a
+      # wall already present in the static map.
+      lethal_cost_threshold: 65
+      trinary_costmap: true
+      unknown_cost_value: 255
+      use_maximum: true
+      plugins:
+        - static_layer
+        - obstacle_layer
+        - depth_stvl_layer
+        - visual_wall_stvl_layer
+        - inflation_layer
+      # Keep Cartographer's already-observed walls in the rolling local map.
+      # This protects camera/LiDAR blind zones next to the chassis.
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        enabled: true
+        map_topic: /map
+        map_subscribe_transient_local: true
+        subscribe_to_updates: true
+        transform_tolerance: 0.30
+        # Jazzy StaticLayer can clear only the cells under the measured robot
+        # footprint. This prevents Cartographer floor speckles at the startup
+        # pose from making RPP report an immediate self-collision. Structural
+        # walls outside the current footprint remain untouched.
+        footprint_clearing_enabled: true
+      depth_voxel_layer:
+        enabled: false
+      depth_stvl_layer:
+        plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
+        enabled: true
+        # Low obstacle memory survives a camera turn, but expires if it is never
+        # observed again. This prevents repeatable floor-depth artifacts from
+        # accumulating into an all-blue/purple local costmap.
+        voxel_decay: 4.0
+        decay_model: 0
+        voxel_size: 0.03
+        # This is a forward-only RGB-D layer. Treating every unobserved side
+        # and rear voxel as unknown can reject every valid controller arc.
+        # The 360-degree laser and Cartographer static layer remain responsible
+        # for unknown-space safety; this layer marks only observed obstacles.
+        track_unknown_space: false
+        unknown_threshold: 15
+        mark_threshold: 1
+        update_footprint_enabled: true
+        combination_method: 1
+        origin_z: -0.20
+        # This is the only RGB-D voxel layer published for RViz auditing.
+        publish_voxel_map: true
+        mapping_mode: false
+        map_save_duration: 60.0
+        observation_sources: rgbd_mark rgbd_clear
+        rgbd_mark:
+          data_type: PointCloud2
+          # Three-frame-confirmed points also pass the recent geometry grade:
+          # >=5 cm above the fitted floor, or a >=3 cm nearby vertical edge.
+          topic: /local_highres_cloud_v21/sensor
+          marking: true
+          clearing: false
+          min_obstacle_height: 0.02
+          max_obstacle_height: 1.40
+          obstacle_range: 3.50
+          observation_persistence: 0.0
+          expected_update_rate: 0.0
+          inf_is_valid: false
+          filter: "voxel"
+          # The C++ producer has already reduced the cloud to one representative
+          # point per 3 cm voxel.
+          voxel_min_points: 1
+          clear_after_reading: true
+        rgbd_clear:
+          data_type: PointCloud2
+          topic: /local_highres_cloud_v21/clear_sensor
+          marking: false
+          clearing: true
+          # These are depth-camera near/far planes, not base_link heights.
+          # Match the producer's valid range so the <20 cm camera blind zone is
+          # never declared free and remembered obstacles can clear out to 3.5 m.
+          min_z: 0.20
+          max_z: 3.50
+          vertical_fov_angle: 0.95
+          horizontal_fov_angle: 1.20
+          decay_acceleration: 8.0
+          model_type: 0
+          observation_persistence: 0.0
+          expected_update_rate: 0.0
+
+      # RTAB-Map's persistent occupied cloud is first reduced to vertical
+      # columns by persistent_visual_wall_filter_node. This adds previously
+      # scanned walls to the local blind-zone model without importing floor
+      # cubes or using the full OctoMap as a permanent dynamic obstacle.
+      visual_wall_stvl_layer:
+        plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
+        enabled: true
+        # RTAB-Map publishes its complete filtered wall cloud roughly every
+        # 5-6 s in the real logs. A 3 s decay made the wall layer blink off
+        # between updates. Fifteen seconds survives two missed publications
+        # while remaining bounded if the visual map process stops.
+        voxel_decay: 15.0
+        decay_model: 0
+        voxel_size: 0.05
+        track_unknown_space: false
+        unknown_threshold: 15
+        mark_threshold: 1
+        update_footprint_enabled: true
+        combination_method: 1
+        origin_z: -0.20
+        publish_voxel_map: false
+        mapping_mode: false
+        map_save_duration: 60.0
+        observation_sources: visual_walls
+        visual_walls:
+          data_type: PointCloud2
+          topic: /rtabmap_3d/navigation_walls
+          marking: true
+          clearing: false
+          min_obstacle_height: 0.08
+          max_obstacle_height: 1.40
+          obstacle_range: 100.0
+          observation_persistence: 0.0
+          expected_update_rate: 0.0
+          inf_is_valid: false
+          filter: "voxel"
+          voxel_min_points: 1
+          clear_after_reading: true
+
+# The global planner uses Cartographer walls plus current laser and bounded
+# recent RGB-D obstacles. Do not add RTAB-Map's full persistent wall projection
+# here: it duplicates Cartographer wall thickness and can bridge a narrow door.
+# The local visual wall layer and C++ gate still protect previously seen walls.
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      lethal_cost_threshold: 65
+      trinary_costmap: true
+      unknown_cost_value: 255
+      use_maximum: true
+      plugins:
+        - static_layer
+        - obstacle_layer
+        - depth_global_stvl_layer
+        - inflation_layer
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        enabled: true
+        map_topic: /map
+        map_subscribe_transient_local: true
+        subscribe_to_updates: true
+        transform_tolerance: 0.30
+        footprint_clearing_enabled: false
+      depth_global_stvl_layer:
+        plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
+        enabled: true
+        # Keep a little more recent history globally than locally so a route is
+        # not immediately replanned through a just-observed low obstacle.
+        voxel_decay: 8.0
+        decay_model: 0
+        voxel_size: 0.05
+        # A forward camera must not turn its unobserved side/rear volume into
+        # NO_INFORMATION in the global costmap. Cartographer's static layer owns
+        # mapped/unknown space; this layer contributes observed obstacles only.
+        track_unknown_space: false
+        unknown_threshold: 15
+        mark_threshold: 1
+        update_footprint_enabled: true
+        combination_method: 1
+        origin_z: -0.20
+        publish_voxel_map: false
+        mapping_mode: false
+        map_save_duration: 60.0
+        observation_sources: rgbd_mark rgbd_clear
+        rgbd_mark:
+          data_type: PointCloud2
+          # Shared three-frame-confirmed, recent-geometry stream.
+          topic: /local_highres_cloud_v21/sensor
+          marking: true
+          clearing: false
+          min_obstacle_height: 0.02
+          max_obstacle_height: 1.40
+          obstacle_range: 3.50
+          observation_persistence: 0.0
+          expected_update_rate: 0.0
+          inf_is_valid: false
+          filter: "voxel"
+          voxel_min_points: 1
+          clear_after_reading: true
+        rgbd_clear:
+          data_type: PointCloud2
+          topic: /local_highres_cloud_v21/clear_sensor
+          marking: false
+          clearing: true
+          min_z: 0.20
+          max_z: 3.50
+          vertical_fov_angle: 0.95
+          horizontal_fov_angle: 1.20
+          decay_acceleration: 8.0
+          model_type: 0
+          observation_persistence: 0.0
+          expected_update_rate: 0.0

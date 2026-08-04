@@ -1,0 +1,506 @@
+树莓派 5B / Gemini2 相机 MJPEG 视频流接口要求
+================================================
+
+文档用途
+--------
+本文档用于树莓派 Linux 端开发人员实现视频流接口，使 Windows 端的
+Robot Camera Viewer 网页可以直接显示奥比中光 Gemini2 相机画面。
+
+版本：第一版
+目标环境：树莓派 5B、Linux、Gemini2、Windows 10/11、Chrome/Edge
+
+
+一、先说明数据传输方向
+----------------------
+
+当前方案不是“树莓派主动上传视频文件或视频流到 Windows”。
+
+正确架构是：
+
+1. 树莓派启动一个 HTTP MJPEG 视频流服务。
+2. 树莓派监听局域网端口，例如 8080。
+3. Windows 网页访问树莓派提供的 URL。
+4. 浏览器通过 HTTP GET 长连接持续拉取 JPEG 帧。
+
+数据流向：
+
+Gemini2 相机
+  -> 树莓派相机采集程序
+  -> JPEG 编码
+  -> HTTP MJPEG 服务
+  -> WiFi 局域网
+  -> Windows 浏览器中的 <img> 标签
+
+因此，Linux 端需要“提供可被访问的拉流接口”，不需要向 Windows 发起
+POST 上传，也不需要把视频发送给某个 Windows 接收端口。
+
+
+二、必须提供的接口
+------------------
+
+接口名称：MJPEG 视频流
+
+请求方法：
+
+GET
+
+建议监听地址：
+
+0.0.0.0
+
+建议端口：
+
+8080
+
+固定路径：
+
+/video_feed
+
+完整地址格式：
+
+http://<树莓派IP>:8080/video_feed
+
+示例：
+
+http://192.168.1.123:8080/video_feed
+
+Windows 网页会把这个完整地址直接设置为：
+
+<img src="http://192.168.1.123:8080/video_feed">
+
+接口不需要请求体，不需要 JSON，不需要 WebSocket，不需要 RTSP，也不需要
+Windows 端安装解码器。
+
+
+三、HTTP 响应要求
+----------------
+
+1. 成功状态码
+
+HTTP/1.1 200 OK
+
+2. 最重要的响应头
+
+Content-Type: multipart/x-mixed-replace; boundary=frame
+
+其中：
+
+- multipart/x-mixed-replace 表示服务器会在同一条 HTTP 连接中不断发送图片。
+- boundary=frame 表示每一帧使用 frame 作为分隔标识。
+- 响应头里的 boundary 值不能带前面的两个连字符。
+
+3. 建议增加的响应头
+
+Cache-Control: no-store, no-cache, must-revalidate
+Pragma: no-cache
+Connection: keep-alive
+Access-Control-Allow-Origin: *
+
+说明：
+
+- Cache-Control 和 Pragma 用于避免浏览器缓存旧画面。
+- Connection: keep-alive 表示保持长连接。
+- 使用 <img> 跨地址显示时通常不强制要求 CORS，但建议返回
+  Access-Control-Allow-Origin: *，方便以后扩展截图、Canvas 或诊断功能。
+
+
+四、每一帧的二进制格式
+----------------------
+
+HTTP 响应头发送完成以后，服务器需要不断重复发送以下内容：
+
+--frame\r\n
+Content-Type: image/jpeg\r\n
+Content-Length: <当前JPEG字节数>\r\n
+\r\n
+<完整的JPEG二进制数据>
+\r\n
+
+下一帧继续：
+
+--frame\r\n
+Content-Type: image/jpeg\r\n
+Content-Length: <下一帧JPEG字节数>\r\n
+\r\n
+<下一帧JPEG二进制数据>
+\r\n
+
+示意：
+
+HTTP/1.1 200 OK
+Content-Type: multipart/x-mixed-replace; boundary=frame
+Cache-Control: no-store, no-cache, must-revalidate
+Connection: keep-alive
+
+--frame
+Content-Type: image/jpeg
+Content-Length: 58231
+
+[58231 字节的 JPEG 图片]
+--frame
+Content-Type: image/jpeg
+Content-Length: 59420
+
+[59420 字节的 JPEG 图片]
+--frame
+...
+
+注意事项：
+
+1. 分隔符必须与响应头中的 boundary 对应。
+2. 响应头写 boundary=frame，每帧前实际写 --frame。
+3. 换行必须使用 \r\n。
+4. JPEG 数据必须是完整、可独立解码的 JPEG 图片。
+5. 不要发送 H.264/H.265 裸流、RTSP 数据、MP4 文件片段或深度原始数据。
+6. Content-Length 强烈建议提供，并且必须等于当前 JPEG 的真实字节数。
+7. HTTP 连接不能在发送一帧后关闭，应持续发送，直到客户端断开。
+
+
+五、视频内容与编码要求
+----------------------
+
+第一版 Windows 网页只接受普通 JPEG 画面组成的 MJPEG 流。
+
+推荐参数：
+
+- 图像格式：JPEG
+- 推荐分辨率：1280 x 720
+- 可接受分辨率：640 x 480、1280 x 720、1920 x 1080
+- 推荐帧率：15～25 FPS
+- 建议上限：30 FPS
+- 推荐 JPEG 质量：75～85
+- 推荐颜色格式：BGR/RGB 图像编码成 JPEG
+- 单帧建议大小：尽量控制在 50 KB～300 KB
+- 第一帧到达时间：客户端连接后尽量小于 2 秒，最长不要超过 5 秒
+
+局域网性能不足时，优先按以下顺序降低带宽：
+
+1. 把分辨率从 1920x1080 降到 1280x720。
+2. 把帧率从 30 FPS 降到 20 或 15 FPS。
+3. 把 JPEG 质量降到 70～80。
+
+不建议无限提高 JPEG 质量。MJPEG 每一帧都是完整图片，码率会明显高于
+H.264；第一版以低延迟、实现简单和浏览器兼容为目标。
+
+
+六、Gemini2 数据要求
+--------------------
+
+Gemini2 是双目深度相机，但当前网页只有一个普通图像显示区域。
+
+树莓派端可以选择发送：
+
+1. RGB 彩色画面（推荐作为第一版）。
+2. 红外画面转换后的可视化 JPEG。
+3. 深度图经过归一化和伪彩色处理后的 JPEG。
+4. 树莓派端提前拼接好的 RGB + 深度画面。
+
+不能直接发送：
+
+- 16 位深度原始矩阵；
+- 点云；
+- Gemini2 SDK 的原始帧对象；
+- 未编码的 RGB/BGR 字节数组；
+- ROS2 Image 消息。
+
+如果以后需要同时独立显示 RGB 和深度画面，建议增加两个地址，例如：
+
+http://<树莓派IP>:8080/rgb_feed
+http://<树莓派IP>:8080/depth_feed
+
+但当前第一版只要求实现：
+
+http://<树莓派IP>:8080/video_feed
+
+
+七、Python + Flask 参考实现
+--------------------------
+
+以下代码展示接口协议。get_gemini2_frame() 需要由树莓派开发人员替换为
+奥比中光 Gemini2 SDK 的实际取帧代码。
+
+安装依赖：
+
+pip install flask opencv-python
+
+参考代码：
+
+from flask import Flask, Response, jsonify
+import cv2
+
+app = Flask(__name__)
+
+
+def get_gemini2_frame():
+    """
+    这里替换为 Gemini2 SDK 取帧逻辑。
+    返回值必须是 OpenCV 可处理的 BGR 图像（numpy.ndarray）。
+    取帧失败时返回 None。
+    """
+    raise NotImplementedError
+
+
+def generate_mjpeg():
+    while True:
+        frame = get_gemini2_frame()
+
+        if frame is None:
+            continue
+
+        ok, encoded = cv2.imencode(
+            ".jpg",
+            frame,
+            [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+        )
+
+        if not ok:
+            continue
+
+        jpeg_bytes = encoded.tobytes()
+
+        yield (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n"
+            + f"Content-Length: {len(jpeg_bytes)}\r\n".encode("ascii")
+            + b"\r\n"
+            + jpeg_bytes
+            + b"\r\n"
+        )
+
+
+@app.get("/video_feed")
+def video_feed():
+    return Response(
+        generate_mjpeg(),
+        status=200,
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "Access-Control-Allow-Origin": "*"
+        }
+    )
+
+
+@app.get("/health")
+def health():
+    return jsonify({
+        "status": "ok",
+        "camera": "Gemini2",
+        "stream": "/video_feed"
+    })
+
+
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=8080,
+        threaded=True,
+        debug=False
+    )
+
+
+重要说明：
+
+1. 上述 get_gemini2_frame() 只是接口占位，不是 Gemini2 SDK 实现。
+2. 实际项目应避免每个浏览器连接都重复打开一次相机。
+3. 推荐使用一个后台采集线程持续读取相机最新帧。
+4. 所有网页客户端共享最新帧，再分别进行输出。
+5. 最后一个客户端断开时，可以选择继续采集或暂停编码。
+6. 客户端断开导致 BrokenPipeError/GeneratorExit 时，应正常回收连接。
+
+
+八、推荐的树莓派程序内部结构
+----------------------------
+
+建议拆分为三个部分：
+
+1. 相机采集线程
+
+- 程序启动时初始化 Gemini2。
+- 持续读取最新 RGB 帧。
+- 只保留最新一帧，避免帧堆积导致延迟越来越高。
+
+2. JPEG 编码
+
+- 把最新帧编码为 JPEG。
+- 建议质量 80。
+- 可按 15～25 FPS 限速。
+
+3. HTTP MJPEG 输出
+
+- GET /video_feed 建立长连接。
+- 按 multipart/x-mixed-replace 格式持续写入 JPEG。
+- 浏览器断开时结束该客户端的输出循环。
+
+低延迟的关键不是把每一帧都排队发完，而是优先发送“当前最新帧”。
+如果网络速度跟不上，应丢弃旧帧，不能让缓存无限增长。
+
+
+九、网络与系统要求
+------------------
+
+1. 树莓派和 Windows 笔记本必须处于同一 WiFi/局域网。
+2. 服务必须监听 0.0.0.0，不能只监听 127.0.0.1。
+3. 树莓派端需要允许 TCP 8080 端口访问。
+4. 路由器不能开启阻止设备互访的 AP Isolation/客户端隔离。
+5. 不要在地址里填写 0.0.0.0；Windows 端填写树莓派的实际局域网 IP。
+6. 第一版使用 HTTP，不要求 HTTPS。
+7. 第一版无登录、无 Token、无 Cookie、无鉴权。
+8. 接口不要返回 HTML 登录页、JSON 错误页或 302 重定向。
+
+树莓派查看 IP：
+
+hostname -I
+
+假设输出：
+
+192.168.1.123
+
+Windows 端使用：
+
+http://192.168.1.123:8080/video_feed
+
+
+十、Linux 端自测方法
+--------------------
+
+1. 检查健康接口（建议实现）
+
+curl http://127.0.0.1:8080/health
+
+预期得到类似：
+
+{"status":"ok","camera":"Gemini2","stream":"/video_feed"}
+
+2. 检查 MJPEG 响应头
+
+curl -v --max-time 3 http://127.0.0.1:8080/video_feed -o /tmp/test.mjpeg
+
+需要在输出中看到：
+
+HTTP/1.1 200 OK
+Content-Type: multipart/x-mixed-replace; boundary=frame
+
+/tmp/test.mjpeg 文件应持续增加，并包含多个完整 JPEG 帧。
+
+3. 树莓派本机浏览器测试
+
+http://127.0.0.1:8080/video_feed
+
+4. Windows 浏览器直接测试
+
+http://<树莓派IP>:8080/video_feed
+
+如果 Windows 浏览器直接打开该地址能看到连续画面，说明 Linux 端接口已经
+基本合格。
+
+
+十一、Windows 网页连接状态说明
+------------------------------
+
+Windows 网页会执行：
+
+videoStream.src = streamUrl;
+
+状态变化：
+
+1. 设置地址后：Connecting...
+2. 浏览器收到并成功解码图像：Receiving stream
+3. 请求失败或 JPEG 无法解码：Connection failed
+4. 用户断开：删除 img 的 src，显示 Disconnected
+
+如果接口返回 HTTP 200，但网页一直停在 Connecting... 或很快显示
+Connection failed，常见原因包括：
+
+- Content-Type 不是 multipart/x-mixed-replace；
+- boundary 格式不匹配；
+- 每帧不是完整 JPEG；
+- 换行格式错误；
+- 服务只发了一帧就关闭；
+- 相机没有输出画面；
+- 返回的是 H.264、RTSP 或 MP4 数据；
+- 第一帧等待时间过长。
+
+
+十二、不支持的协议与功能
+------------------------
+
+当前第一版明确不支持：
+
+- rtsp:// 地址；
+- RTMP；
+- H.264/H.265 裸流；
+- MP4 文件直接作为 img 地址；
+- WebRTC；
+- HLS/m3u8；
+- ROS2；
+- WebSocket 视频传输；
+- POST 上传视频；
+- 机器人控制；
+- 点云与原始深度数据。
+
+如果树莓派目前只有 RTSP 输出，需要在树莓派端先转换成本文规定的 MJPEG
+HTTP 接口，Windows 网页不会直接播放 RTSP。
+
+
+十三、接口验收清单
+------------------
+
+树莓派开发人员交付前逐项确认：
+
+[ ] 服务监听 0.0.0.0:8080
+[ ] GET /video_feed 返回 HTTP 200
+[ ] Content-Type 为 multipart/x-mixed-replace; boundary=frame
+[ ] 每帧以 --frame 开始
+[ ] 每帧 Content-Type 为 image/jpeg
+[ ] 每帧 JPEG 可以独立解码
+[ ] HTTP 连接持续发送，不在一帧后关闭
+[ ] 建议帧率 15～25 FPS
+[ ] 建议分辨率 1280x720
+[ ] 网络慢时丢弃旧帧，不累积长延迟
+[ ] Windows 浏览器能直接打开视频流 URL
+[ ] Robot Camera Viewer 显示 Receiving stream
+[ ] 点击 Disconnect 后服务器能检测客户端断开
+[ ] 无需用户名、密码或 Token
+[ ] 不使用 RTSP、WebSocket 或 POST 上传
+
+
+十四、最终需要提供给 Windows 端的信息
+-------------------------------------
+
+树莓派开发人员最终只需要提供一个可访问的完整地址，例如：
+
+http://192.168.1.123:8080/video_feed
+
+同时建议提供：
+
+- 树莓派当前 IP；
+- 端口；
+- 视频路径；
+- 分辨率；
+- 帧率；
+- 输出内容是 RGB、红外、深度伪彩色还是拼接画面；
+- 服务启动命令；
+- 服务日志查看命令；
+- 健康检查地址。
+
+健康检查建议地址：
+
+http://192.168.1.123:8080/health
+
+
+结论
+----
+
+Linux 端的核心任务是：
+
+把 Gemini2 采集到的画面逐帧编码成 JPEG，并通过一个持续不断的
+HTTP multipart/x-mixed-replace 响应对外提供。
+
+唯一必须对接的网页地址格式为：
+
+http://<树莓派IP>:8080/video_feed
+
+这不是文件上传接口，也不是 POST 推流接口，而是由 Windows 浏览器主动
+连接和拉取的 MJPEG HTTP 长连接接口。

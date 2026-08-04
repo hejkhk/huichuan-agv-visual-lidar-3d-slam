@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain Id="any">
+    <Discovery>
+      <!--
+        The dual-3D stack intentionally runs many ROS processes. Random
+        participant ports remove CycloneDDS' default participant-index ceiling
+        and prevent short-lived ros2 CLI probes from starving launch nodes.
+        This profile uses multicast discovery on the local robot computer.
+      -->
+      <ParticipantIndex>none</ParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

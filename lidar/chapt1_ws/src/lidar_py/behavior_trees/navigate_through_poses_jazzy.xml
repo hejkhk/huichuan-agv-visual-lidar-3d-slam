@@ -1,0 +1,40 @@
+<!-- Multi-goal differential-drive navigation with bounded recovery. Humble compatible. -->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithStableReplanning">
+        <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
+        <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
+
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathThroughPoses">
+            <ComputePathThroughPoses goals="{goals}" path="{path}" planner_id="{selected_planner}"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+
+        <RecoveryNode number_of_retries="2" name="FollowPath">
+          <FollowPath path="{path}" controller_id="{selected_controller}"/>
+          <Sequence name="BoundedControllerRecovery">
+            <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_global_costmap"/>
+            <RoundRobin name="SafeEscapeActions">
+              <BackUp name="ShortBackUp" backup_dist="0.16" backup_speed="0.05" time_allowance="5.0"/>
+              <Spin name="SmallEscapeTurn" spin_dist="0.20" time_allowance="6.0"/>
+              <Wait name="BriefWait" wait_duration="3.0"/>
+            </RoundRobin>
+          </Sequence>
+        </RecoveryNode>
+      </PipelineSequence>
+
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="GlobalRecoveryActions">
+          <ClearEntireCostmap name="ClearAllCostmaps" service_name="global_costmap/clear_entirely_global_costmap"/>
+          <Spin spin_dist="1.57"/>
+          <BackUp backup_dist="0.30" backup_speed="0.05"/>
+          <Wait wait_duration="5"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>
