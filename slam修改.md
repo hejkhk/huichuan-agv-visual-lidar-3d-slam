@@ -4152,3 +4152,5 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
 - `.gitignore` 新增根目录 `Log/` 与 `SLAM_Log.zip`，GitHub Actions 同时验证 `jetson` 分支。
 - 日志还显示同一次运行中 2D 雷达最多重连 97 次；这部分需在 Jetson 实机检查 USB 拓扑、
   供电和是否存在第二个串口读取进程，软件安全看门狗继续在断流时停车。
+- GitHub Humble 预检跳过仅由外部 Orbbec/Cartographer 源码引入的 `libgoogle-glog-dev`；
+  避免 hosted runner 的 `libunwind` 冲突在项目编译前误报失败，不改变 Jetson 安装脚本。

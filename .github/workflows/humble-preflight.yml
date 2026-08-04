@@ -47,7 +47,7 @@ jobs:
           rosdep update
           rosdep install --from-paths "lidar/chapt1_ws/src" \
             --ignore-src --rosdistro humble -r -y \
-            --skip-keys "orbbec_camera cartographer_ros"
+            --skip-keys "orbbec_camera cartographer_ros libgoogle-glog-dev"
 
       - name: Build and validate Humble stack
         shell: bash
