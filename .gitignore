@@ -2,9 +2,6 @@
 lidar/chapt1_ws/build/
 lidar/chapt1_ws/install/
 lidar/chapt1_ws/log/
-lidar/chapt1_ws/src/OrbbecSDK_ROS2/
-
-# Cache build
 .cache/
 __pycache__/
 *.pyc
@@ -13,7 +10,8 @@ __pycache__/
 SLAM_Log/
 
 # Generated maps and persistent databases
-maps/rtabmap_3d/
+maps/
+maps_3d/
 *.db
 *.db-shm
 *.db-wal
@@ -29,3 +27,8 @@ lidar/chapt1_ws/src/local_depth_cloud_cpp/local_depth_cloud_cpp
 # OS
 .DS_Store
 Thumbs.db
+
+# Node modules
+web/node_modules/
+web_ctrl/web_server.log
+web_ctrl/web_server.pid
