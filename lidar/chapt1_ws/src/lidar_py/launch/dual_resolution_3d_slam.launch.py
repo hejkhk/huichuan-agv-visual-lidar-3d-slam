@@ -116,6 +116,8 @@ def generate_launch_description():
         DeclareLaunchArgument("align_mode", default_value="SW"),
         DeclareLaunchArgument("align_target_stream", default_value="DEPTH"),
         DeclareLaunchArgument("camera_time_sync_period", default_value="10.0"),
+        DeclareLaunchArgument("camera_enable_frame_drop_log", default_value="false"),
+        DeclareLaunchArgument("camera_frame_timestamp_csv_file", default_value=""),
         DeclareLaunchArgument("rgbd_sync_max_interval", default_value="0.030"),
         DeclareLaunchArgument("rgbd_sync_max_interval_ms", default_value="30.0"),
         DeclareLaunchArgument("rgbd_sync_warn_p95_ms", default_value="25.0"),
@@ -128,6 +130,7 @@ def generate_launch_description():
 
         DeclareLaunchArgument("database_path", default_value="/tmp/rtabmap_3d.db"),
         DeclareLaunchArgument("rtabmap_rate", default_value="2.0"),
+        DeclareLaunchArgument("rtabmap_threads", default_value="2"),
         DeclareLaunchArgument("global_3d_voxel", default_value="0.08"),
         DeclareLaunchArgument("global_3d_range_max", default_value="4.0"),
         DeclareLaunchArgument("use_octomap", default_value="true"),
@@ -229,14 +232,16 @@ def generate_launch_description():
             "color_width": LaunchConfiguration("color_width"),
             "color_height": LaunchConfiguration("color_height"),
             "color_fps": LaunchConfiguration("color_fps"),
-            "color_qos": "DEFAULT",
-            "color_camera_info_qos": "DEFAULT",
+            # Image streams are lossy sensor data. Reliable QoS can back-pressure
+            # the Gemini2 driver when RTAB-Map or RViz is slower than the camera.
+            "color_qos": "SENSOR_DATA",
+            "color_camera_info_qos": "SENSOR_DATA",
             "enable_depth": "true",
             "depth_width": LaunchConfiguration("depth_width"),
             "depth_height": LaunchConfiguration("depth_height"),
             "depth_fps": LaunchConfiguration("depth_fps"),
-            "depth_qos": "DEFAULT",
-            "depth_camera_info_qos": "DEFAULT",
+            "depth_qos": "SENSOR_DATA",
+            "depth_camera_info_qos": "SENSOR_DATA",
             "depth_registration": LaunchConfiguration("depth_registration"),
             "align_mode": LaunchConfiguration("align_mode"),
             "align_target_stream": LaunchConfiguration("align_target_stream"),
@@ -244,6 +249,10 @@ def generate_launch_description():
             "enable_sync_host_time": "true",
             "time_domain": "device",
             "time_sync_period": LaunchConfiguration("camera_time_sync_period"),
+            "enable_frame_drop_log": LaunchConfiguration(
+                "camera_enable_frame_drop_log"),
+            "frame_timestamp_csv_file": LaunchConfiguration(
+                "camera_frame_timestamp_csv_file"),
             "enable_point_cloud": "false",
             "enable_colored_point_cloud": "false",
             "enable_noise_removal_filter": "true",
@@ -560,7 +569,7 @@ def generate_launch_description():
         # CPU worker. Keep it below the real-time local collision-cloud path.
         prefix="nice -n 8",
         additional_env={
-            "OMP_NUM_THREADS": "2",
+            "OMP_NUM_THREADS": LaunchConfiguration("rtabmap_threads"),
             "OPENBLAS_NUM_THREADS": "1",
             "MKL_NUM_THREADS": "1",
         },

@@ -2,9 +2,9 @@ name: Humble preflight
 
 on:
   push:
-    branches: [main]
+    branches: [main, jetson]
   pull_request:
-    branches: [main]
+    branches: [main, jetson]
   workflow_dispatch:
 
 concurrency:

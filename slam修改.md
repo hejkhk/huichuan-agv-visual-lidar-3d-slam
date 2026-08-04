@@ -4138,3 +4138,17 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
   `dwb_plugins` 才包含 DWB 实际使用的 `StandardTrajectoryGenerator`。
 - 增加 `dwb_critics` 运行时依赖；它提供 `RotateToGoalCritic`、`PathDistCritic` 等
   DWB 轨迹评分器，缺失时 controller server 会在 lifecycle configure 阶段拒绝启动。
+
+# 2026-08-05 V6.51：Jetson Gemini2 点云断流治理
+
+- 汇总 8 月 5 日全部有效日志：本地点云最长停顿约 `10.2 s`，但点云单帧计算最坏约
+  `127 ms`；停顿期间 RGB 接近 `15 Hz`、Depth 接近 `0 Hz`，确认不是 C++ 点云滤波排队。
+- Gemini2 图像和 CameraInfo 改为 `SENSOR_DATA` QoS，防止低速 RTAB-Map/RViz 的可靠传输
+  队列反压相机深度发布线程。
+- 自动识别 Jetson 平台并默认将 RTAB-Map 调整为 `1 Hz`、单 OMP 线程；PC 默认值保持不变，
+  3 cm/15 Hz 本地碰撞点云保持不变。
+- 启用 Orbbec 官方帧丢失统计，CSV 随每次运行写入对应 `SLAM_Log` 会话目录。
+- 修正 `ros2 --no-daemon param get` 参数位置，并在启动前加载缓存构建 overlay。
+- `.gitignore` 新增根目录 `Log/` 与 `SLAM_Log.zip`，GitHub Actions 同时验证 `jetson` 分支。
+- 日志还显示同一次运行中 2D 雷达最多重连 97 次；这部分需在 Jetson 实机检查 USB 拓扑、
+  供电和是否存在第二个串口读取进程，软件安全看门狗继续在断流时停车。

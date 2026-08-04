@@ -141,7 +141,22 @@ source "$ENV_FILE"
 RTABMAP_DATABASE="${DUAL_3D_DATABASE:-${RTABMAP_DATABASE:-maps/rtabmap_3d/rtabmap_v4_color.db}}"
 RESET_GLOBAL_3D_MAP="${DUAL_3D_RESET_GLOBAL_MAP:-${RESET_GLOBAL_3D_MAP:-false}}"
 REQUIRE_DEPTH_BASELINE_FOR_PS2="${DUAL_3D_REQUIRE_DEPTH_BASELINE_FOR_PS2:-${REQUIRE_DEPTH_BASELINE_FOR_PS2:-true}}"
-RTABMAP_RATE="${DUAL_3D_RTABMAP_RATE:-${RTABMAP_RATE:-2.0}}"
+JETSON_PLATFORM=false
+if [ -f /etc/nv_tegra_release ]; then
+  JETSON_PLATFORM=true
+elif [ -r /proc/device-tree/model ] && \
+    tr -d '\0' </proc/device-tree/model 2>/dev/null | grep -qi 'NVIDIA.*Jetson'; then
+  JETSON_PLATFORM=true
+fi
+if is_true "$JETSON_PLATFORM"; then
+  DEFAULT_RTABMAP_RATE=1.0
+  DEFAULT_RTABMAP_THREADS=1
+else
+  DEFAULT_RTABMAP_RATE=2.0
+  DEFAULT_RTABMAP_THREADS=2
+fi
+RTABMAP_RATE="${DUAL_3D_RTABMAP_RATE:-${RTABMAP_RATE:-$DEFAULT_RTABMAP_RATE}}"
+RTABMAP_THREADS="${DUAL_3D_RTABMAP_THREADS:-${RTABMAP_THREADS:-$DEFAULT_RTABMAP_THREADS}}"
 ENABLE_VISUAL_FUSION="${DUAL_3D_ENABLE_VISUAL_FUSION:-${ENABLE_VISUAL_FUSION:-false}}"
 ENABLE_STVL="${DUAL_3D_ENABLE_STVL:-${ENABLE_STVL:-true}}"
 ENABLE_FIXED_SCAN_FILTER="${ENABLE_FIXED_SCAN_FILTER:-true}"
@@ -404,7 +419,7 @@ wait_parameter_value() {
   while [ "$SECONDS" -lt "$deadline" ]; do
     kill -0 "$LAUNCH_PID" 2>/dev/null || return 1
     value="$(timeout --signal=TERM --kill-after=1s 3s \
-      ros2 param get "$node" "$parameter" 2>/dev/null || true)"
+      ros2 --no-daemon param get "$node" "$parameter" 2>/dev/null || true)"
     if printf '%s\n' "$value" | grep -Fq "$expected"; then
       log "[ready] $node $parameter=$expected"
       return 0
@@ -620,6 +635,13 @@ prepare_humble_build_cache "$SOURCE_WS/src"
 ros2 daemon stop >/dev/null 2>&1 || true
 export ROS2CLI_NO_DAEMON=1
 
+# Source cached install overlay so packages like orbbec_camera are visible
+# to check_pkg before the incremental rebuild step.
+if [ -f "$INSTALL_BASE/setup.bash" ]; then
+  # shellcheck disable=SC1090
+  source "$INSTALL_BASE/setup.bash"
+fi
+
 for pkg in orbbec_camera cartographer_ros laser_filters rtabmap_slam rtabmap_rviz_plugins octomap_server robot_state_publisher xacro rmw_cyclonedds_cpp depth_image_proc rclcpp_components; do
   check_pkg "$pkg"
 done
@@ -807,6 +829,8 @@ log "  NAVI watchdog   : ${NAVI_MOTION_WATCHDOG_ENABLED:-true}, ${NAVI_MOTION_WA
 log "  LiDAR           : $LIDAR_PORT @ $LIDAR_BAUD"
 log "  STM32           : $CHASSIS_PORT @ 115200"
 log "  RViz            : $USE_RVIZ"
+log "  Platform        : $([ "$JETSON_PLATFORM" = true ] && printf 'Jetson' || printf 'generic')"
+log "  RTAB workers    : $RTABMAP_THREADS"
 log "  Runtime log     : $RUNTIME_LOG"
 log "============================================================"
 
@@ -871,6 +895,8 @@ cmd=(ros2 launch lidar_py dual_resolution_3d_slam.launch.py
   "align_mode:=${CAMERA_ALIGN_MODE:-HW}"
   "align_target_stream:=${CAMERA_ALIGN_TARGET_STREAM:-COLOR}"
   "camera_time_sync_period:=${CAMERA_TIME_SYNC_PERIOD:-10.0}"
+  "camera_enable_frame_drop_log:=${CAMERA_ENABLE_FRAME_DROP_LOG:-true}"
+  "camera_frame_timestamp_csv_file:=$LOG_DIR/orbbec_frame_timestamp.csv"
   "rgbd_sync_max_interval:=${RGBD_SYNC_MAX_INTERVAL:-0.030}"
   "rgbd_sync_max_interval_ms:=${RGBD_SYNC_MAX_INTERVAL_MS:-30.0}"
   "rgbd_sync_warn_p95_ms:=${RGBD_SYNC_WARN_P95_MS:-25.0}"
@@ -882,6 +908,7 @@ cmd=(ros2 launch lidar_py dual_resolution_3d_slam.launch.py
   "camera_yaw:=$CAMERA_YAW"
   "database_path:=$DATABASE_PATH"
   "rtabmap_rate:=${RTABMAP_RATE:-2.0}"
+  "rtabmap_threads:=$RTABMAP_THREADS"
   "global_3d_voxel:=${GLOBAL_3D_VOXEL:-0.08}"
   "global_3d_range_max:=${GLOBAL_3D_RANGE_MAX:-4.0}"
   "use_octomap:=${USE_OCTOMAP:-true}"

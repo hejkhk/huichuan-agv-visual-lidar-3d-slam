@@ -8,6 +8,8 @@ __pycache__/
 
 # Logs
 SLAM_Log/
+/Log/
+/SLAM_Log.zip
 
 # Generated maps and persistent databases
 maps/
