@@ -3,6 +3,7 @@ set -Eeo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIDAR_SRC="$ROOT_DIR/lidar/chapt1_ws/src/lidar_py"
+ORBBEC_SRC="$ROOT_DIR/lidar/chapt1_ws/src/OrbbecSDK_ROS2"
 SYSTEM_PYTHON="${CAR_SYSTEM_PYTHON:-/usr/bin/python3}"
 BUILD_ROOT="${CAR_HUMBLE_BUILD_ROOT:-$HOME/.cache/huichuan_agv_humble_ws}"
 
@@ -47,6 +48,18 @@ for package in "${required_packages[@]}"; do
   ros2 pkg prefix "$package" >/dev/null 2>&1 || fail "Missing ROS package: $package"
 done
 pass "Humble Cartographer/Nav2/RTAB-Map/STVL dependencies"
+
+# Hosted CI cannot link or exercise Jetson camera binaries, but it still
+# verifies that the complete ARM64 runtime payload is present in the branch.
+for file in \
+  "$ORBBEC_SRC/orbbec_camera/package.xml" \
+  "$ORBBEC_SRC/orbbec_camera_msgs/package.xml" \
+  "$ORBBEC_SRC/orbbec_description/package.xml" \
+  "$ORBBEC_SRC/orbbec_camera/SDK/lib/arm64/libOrbbecSDK.so.2.9.3" \
+  "$ORBBEC_SRC/orbbec_camera/SDK/lib/arm64/extensions/depthengine/libdepthengine.so.2.0"; do
+  [ -r "$file" ] || fail "Missing Jetson Orbbec runtime file: $file"
+done
+pass "Jetson Orbbec wrapper and ARM64 SDK payload"
 
 [ ! -f "$ROOT_DIR/lidar/chapt1_ws/src/short_goal_bt/COLCON_IGNORE" ] ||
   fail "Humble short_goal_bt is unexpectedly excluded from workspace builds"
@@ -231,6 +244,15 @@ done
 pass "One-click and calibration script syntax"
 
 if [ "${1:-}" = "--build" ]; then
+  declare -a BUILD_SELECTION=(--packages-up-to lidar_py)
+  if [ "${CAR_VALIDATION_SKIP_EXTERNAL:-0}" = "1" ]; then
+    # orbbec_camera is an exec dependency of lidar_py, so --packages-up-to
+    # selects it unless explicitly excluded. The real driver is built and
+    # exercised on Jetson; this hosted x86 job validates project-owned code.
+    BUILD_SELECTION+=(
+      --packages-skip orbbec_camera orbbec_camera_msgs orbbec_description
+    )
+  fi
   mkdir -p "$BUILD_ROOT"
   if [ -L "$BUILD_ROOT/src" ]; then
     rm -f "$BUILD_ROOT/src"
@@ -242,7 +264,7 @@ if [ "${1:-}" = "--build" ]; then
     --base-paths "$BUILD_ROOT/src" \
     --build-base "$BUILD_ROOT/build" \
     --install-base "$BUILD_ROOT/install" \
-    --symlink-install --packages-up-to lidar_py \
+    --symlink-install "${BUILD_SELECTION[@]}" \
     --cmake-args "-DPython3_EXECUTABLE=$SYSTEM_PYTHON" || fail "Humble build failed"
   pass "Humble workspace build"
 

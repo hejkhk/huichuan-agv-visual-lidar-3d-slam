@@ -1,5 +1,13 @@
 # 双分辨率 2D/3D SLAM 修改记录
 
+## 2026-08-05 V6.52：GitHub x86 预检边界修正
+
+- 托管的 Ubuntu 22.04 runner 是 x86 且没有 Gemini2，不能代替 Jetson 链接、运行 ARM64 相机 SDK。
+- `CAR_VALIDATION_SKIP_EXTERNAL=1` 现在会从 hosted `colcon build` 中明确排除
+  `orbbec_camera`、`orbbec_camera_msgs` 和 `orbbec_description`，避免把硬件或架构环境错误误判为项目失败。
+- CI 仍逐项验证三个 Orbbec ROS 包、ARM64 `libOrbbecSDK.so.2.9.3` 和 ARM64 深度引擎均已上传；
+  项目自身的 Humble 包、定制行为树及 Nav2 lifecycle/pluginlib 测试仍完整执行。
+
 ## 一、修改目标
 
 本次修改针对 `STEP11_CLEAN_VISUAL_LIDAR_SLAM_TEST.sh` 启动后地图立即旋转、发散和乱飘的问题，并将系统整理为三层感知结构：
