@@ -17,6 +17,14 @@
   x86 PC 使用 `2 Hz / 2 OMP线程`。
 - 该频率只影响长期 RTAB-Map/OctoMap 更新；`640x400 @ 15 Hz`、3 cm 的实时碰撞点云保持不变。
 
+## 2026-08-05 V6.54：首次下载后的 Orbbec 自动构建
+
+- 修复重新下载或修改项目绝对路径后，构建指纹清理旧缓存，启动器却在重新编译之前报
+  `Missing ROS package: orbbec_camera` 的启动顺序错误。
+- 当 `orbbec_camera` 不可见时，一键启动器现在自动使用仓库内的官方 Wrapper，单线程编译
+  `orbbec_camera_msgs` 和 `orbbec_camera` 到隔离缓存，并在成功加载新 overlay 后继续检查。
+- 已存在且可用的 Orbbec overlay 不会重复编译；系统 Orbbec SDK、udev 规则和相机参数不变。
+
 ## 一、修改目标
 
 本次修改针对 `STEP11_CLEAN_VISUAL_LIDAR_SLAM_TEST.sh` 启动后地图立即旋转、发散和乱飘的问题，并将系统整理为三层感知结构：

@@ -354,6 +354,43 @@ check_pkg() {
   ros2 pkg prefix "$1" >/dev/null 2>&1 || die "Missing ROS package: $1"
 }
 
+ensure_orbbec_camera() {
+  local wrapper_root="$SOURCE_WS/src/OrbbecSDK_ROS2"
+  if ros2 pkg prefix orbbec_camera >/dev/null 2>&1; then
+    return 0
+  fi
+
+  [ -f "$wrapper_root/orbbec_camera/package.xml" ] || \
+    die "Missing bundled Orbbec wrapper: $wrapper_root/orbbec_camera"
+  [ -f "$wrapper_root/orbbec_camera_msgs/package.xml" ] || \
+    die "Missing bundled Orbbec messages: $wrapper_root/orbbec_camera_msgs"
+
+  log "[build] orbbec_camera is not installed in the current overlay."
+  log "[build] Building the bundled Gemini2 Humble wrapper (one worker)..."
+  reset_cached_package orbbec_camera
+  reset_cached_package orbbec_camera_msgs
+  if ! PYTHONNOUSERSITE=1 colcon --log-base "$LOG_BASE" build \
+      --base-paths \
+        "$wrapper_root/orbbec_camera_msgs" \
+        "$wrapper_root/orbbec_camera" \
+      --build-base "$BUILD_BASE" \
+      --install-base "$INSTALL_BASE" \
+      --symlink-install \
+      --parallel-workers 1 \
+      --packages-select orbbec_camera_msgs orbbec_camera \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release \
+      2>&1 | tee -a "$RUNTIME_LOG"; then
+    die "Bundled orbbec_camera build failed. Check Orbbec SDK v2.9.3 ARM64 and rosdep dependencies."
+  fi
+  [ -f "$INSTALL_BASE/setup.bash" ] || \
+    die "Orbbec build did not create $INSTALL_BASE/setup.bash"
+  # shellcheck disable=SC1090
+  source "$INSTALL_BASE/setup.bash"
+  ros2 pkg prefix orbbec_camera >/dev/null 2>&1 || \
+    die "orbbec_camera is still unavailable after a successful build"
+  log "[ready] Bundled orbbec_camera is available in the isolated overlay."
+}
+
 reset_cached_package() {
   local package="$1" path
   [ -n "$CACHE_WS" ] && [ "$CACHE_WS" != "/" ] || \
@@ -641,6 +678,12 @@ if [ -f "$INSTALL_BASE/setup.bash" ]; then
   # shellcheck disable=SC1090
   source "$INSTALL_BASE/setup.bash"
 fi
+
+# A fresh clone, a renamed project directory or a build fingerprint change can
+# legitimately clear the isolated install tree. Rebuild the bundled camera
+# wrapper before package validation instead of failing with a misleading
+# "Missing ROS package: orbbec_camera" message.
+ensure_orbbec_camera
 
 for pkg in orbbec_camera cartographer_ros laser_filters rtabmap_slam rtabmap_rviz_plugins octomap_server robot_state_publisher xacro rmw_cyclonedds_cpp depth_image_proc rclcpp_components; do
   check_pkg "$pkg"
