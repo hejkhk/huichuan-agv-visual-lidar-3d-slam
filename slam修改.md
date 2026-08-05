@@ -1,5 +1,13 @@
 # 双分辨率 2D/3D SLAM 修改记录
 
+## 2026-08-05 V6.56：Jetson 串口瞬断恢复与增量构建
+
+- 根据 `dual_3d_2026-08-05_20-30-51` 确认 Gemini2 已正常输出约 15 Hz RGB/深度；本次退出来自 `chassis_node` 读取 `/dev/ttyUSB0` 时未捕获 `SerialException`，不是相机 SDK 再次缺失。
+- 底盘串口读取或写入发生 USB 瞬断时，不再让 ROS 节点异常退出；节点关闭失效句柄、速度状态归零，并以 1 秒间隔自动重连。若串口长期不恢复，启动器仍会因真实 `/odom` 缺失安全退出。
+- Humble 构建缓存不再包含 Git 提交号。普通 `git pull` 不会清空 Orbbec 和全部工作区缓存；只有 ROS、Ubuntu、Python 或源码路径变化才执行完整失效。
+- `local_depth_cloud_cpp` 改为源码内容指纹：只有该包源码变化才清理并重编，日常启动使用 colcon 增量结果。
+- 旧 `humble-v2` 缓存若环境仍兼容会直接迁移，不会因为本次更新再进行一次十几分钟的 Orbbec 全量编译。
+
 ## 2026-08-05 V6.52：GitHub x86 预检边界修正
 
 - 托管的 Ubuntu 22.04 runner 是 x86 且没有 Gemini2，不能代替 Jetson 链接、运行 ARM64 相机 SDK。

@@ -296,6 +296,9 @@ class ChassisNode(Node):
         self.ser = None
         self.serial_port = serial_port
         self.baudrate = baudrate
+        self.serial_reconnect_interval_sec = 1.0
+        self.serial_next_reconnect_monotonic = 0.0
+        self.serial_disconnect_count = 0
         self._connect_serial()
 
         # ===== 里程计累计位姿 =====
@@ -586,8 +589,8 @@ class ChassisNode(Node):
                 f"enc_wz={self.encoder_observer_wz:+.3f}]"
             ))
 
-    def _connect_serial(self):
-        for attempt in range(10):
+    def _connect_serial(self, attempts=10):
+        for attempt in range(attempts):
             try:
                 self.ser = serial.Serial(
                     self.serial_port, self.baudrate, timeout=0.05)
@@ -599,26 +602,62 @@ class ChassisNode(Node):
                     self.ser.write(frame)
                     self.last_tx_line = self._format_tx_frame(frame, [0, 0, 0, 0])
                 return
-            except serial.SerialException as e:
+            except (serial.SerialException, OSError) as e:
                 self.get_logger().warn(
-                    f"串口打开失败 ({attempt+1}/10): {e}")
-                time.sleep(1.0)
+                    f"串口打开失败 ({attempt+1}/{attempts}): {e}")
+                if attempt + 1 < attempts:
+                    time.sleep(1.0)
         self.get_logger().error(
             f"无法打开串口 {self.serial_port}，节点将以无数据模式运行")
-        self.ser = serial.Serial.__new__(serial.Serial)
-        self.ser.is_open = False
+        self.ser = None
 
     # ==================== 上行帧解析 ====================
 
+    def _handle_serial_disconnect(self, operation, exc):
+        self.serial_disconnect_count += 1
+        self.get_logger().error(
+            f"Serial {operation} failed on {self.serial_port}: {exc}; "
+            "keeping chassis node alive and reconnecting automatically")
+        old_serial = self.ser
+        self.ser = None
+        if old_serial is not None:
+            try:
+                old_serial.close()
+            except (serial.SerialException, OSError):
+                pass
+        self.current_vx = 0.0
+        self.current_vy = 0.0
+        self.current_vz = 0.0
+        self._buffer = bytearray()
+        self.serial_next_reconnect_monotonic = (
+            time.monotonic() + self.serial_reconnect_interval_sec)
+
+    def _reconnect_serial_if_due(self):
+        now = time.monotonic()
+        if now < self.serial_next_reconnect_monotonic:
+            return
+        self.serial_next_reconnect_monotonic = (
+            now + self.serial_reconnect_interval_sec)
+        self._connect_serial(attempts=1)
+        if self.ser is not None and self.ser.is_open:
+            self.get_logger().info(
+                f"Serial {self.serial_port} reconnected after "
+                f"{self.serial_disconnect_count} disconnect(s)")
+
     def read_serial(self):
-        if not hasattr(self, 'ser') or not self.ser.is_open:
+        if (not hasattr(self, 'ser') or self.ser is None
+                or not self.ser.is_open):
+            self._reconnect_serial_if_due()
             return
 
-        in_waiting = self.ser.in_waiting
-        if in_waiting <= 0:
+        try:
+            in_waiting = self.ser.in_waiting
+            if in_waiting <= 0:
+                return
+            data = self.ser.read(in_waiting)
+        except (serial.SerialException, OSError) as exc:
+            self._handle_serial_disconnect("read", exc)
             return
-
-        data = self.ser.read(in_waiting)
 
         if not hasattr(self, '_buffer'):
             self._buffer = bytearray()
@@ -2018,15 +2057,17 @@ class ChassisNode(Node):
         self.last_tx_line = self._format_tx_frame(frame, speeds)
         self._publish_tx_debug(frame, speeds, source)
 
-        if not hasattr(self, 'ser') or not self.ser.is_open:
+        if (not hasattr(self, 'ser') or self.ser is None
+                or not self.ser.is_open):
             self.get_logger().warn(f"{source}: serial is not open")
             return False
 
         try:
             self.ser.write(frame)
             return True
-        except serial.SerialException as e:
+        except (serial.SerialException, OSError) as e:
             self.get_logger().warn(f"{source}: serial write failed: {e}")
+            self._handle_serial_disconnect("write", e)
             return False
 
     # ==================== /cmd_vel 处理 ====================
@@ -2065,7 +2106,8 @@ class ChassisNode(Node):
         wheel_msg.data = [left_cnt, right_cnt]
         self.wheel_speed_pub.publish(wheel_msg)
 
-        if not hasattr(self, 'ser') or not self.ser.is_open:
+        if (not hasattr(self, 'ser') or self.ser is None
+                or not self.ser.is_open):
             return
 
         spd = self._cmd_vel_to_spd(vx, vz)
@@ -2086,8 +2128,9 @@ class ChassisNode(Node):
         try:
             self.ser.write(frame)
             self._publish_tx_debug(frame, spd, "CMD_VEL_SAFE")
-        except serial.SerialException as e:
+        except (serial.SerialException, OSError) as e:
             self.get_logger().warn(f"发送 {self.cmd_vel_topic} 到串口失败: {e}")
+            self._handle_serial_disconnect("write", e)
 
     # ==================== 发布 Odometry ====================
 
@@ -2203,7 +2246,8 @@ class ChassisNode(Node):
     # ==================== 资源清理 ====================
 
     def destroy_node(self):
-        if hasattr(self, 'ser') and self.ser.is_open:
+        if (hasattr(self, 'ser') and self.ser is not None
+                and self.ser.is_open):
             if (
                     self.release_ps2_on_shutdown
                     and not self.software_estop
@@ -2225,7 +2269,10 @@ class ChassisNode(Node):
                     if rclpy.ok():
                         self.get_logger().warn(
                             f"Shutdown PS2 release failed: {exc}")
-            self.ser.close()
+            try:
+                self.ser.close()
+            except (serial.SerialException, OSError):
+                pass
             if rclpy.ok():
                 self.get_logger().info("串口已关闭")
         if getattr(self, 'show_serial_window', False):

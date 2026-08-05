@@ -405,13 +405,13 @@ reset_cached_package() {
 
 prepare_humble_build_cache() {
   local source_root="$1"
-  local marker="$CACHE_WS/.humble-build-environment-v2"
+  local marker="$CACHE_WS/.humble-build-environment-v3"
+  local legacy_marker="$CACHE_WS/.humble-build-environment-v2"
   local ubuntu_version="unknown"
   local python_path="${CAR_SYSTEM_PYTHON:-/usr/bin/python3}"
   local python_version="unknown"
   local source_path="unknown"
-  local source_revision="unknown"
-  local expected="" previous="" path=""
+  local expected="" previous="" normalized_previous="" path=""
 
   [ -n "$CACHE_WS" ] && [ "$CACHE_WS" != "/" ] || \
     die "Refusing to use an invalid build cache root: ${CACHE_WS:-<empty>}"
@@ -422,15 +422,25 @@ prepare_humble_build_cache() {
   fi
   [ -x "$python_path" ] || die "System Python is unavailable: $python_path"
   python_version="$($python_path -c 'import platform; print(platform.python_version())')"
-  source_revision="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || printf 'no-git')"
-  expected="schema=humble-v2
+  expected="schema=humble-v3
 ros=humble
 os=$ubuntu_version
 python=$python_path:$python_version
-source=$source_path
-revision=$source_revision"
+source=$source_path"
 
-  [ -f "$marker" ] && previous="$(cat "$marker")"
+  if [ -f "$marker" ]; then
+    previous="$(cat "$marker")"
+  elif [ -f "$legacy_marker" ]; then
+    previous="$(cat "$legacy_marker")"
+    normalized_previous="$(printf '%s\n' "$previous" | \
+      sed 's/^schema=humble-v2$/schema=humble-v3/' | \
+      grep -v '^revision=')"
+    if [ "$normalized_previous" = "$expected" ]; then
+      previous="$expected"
+      printf '%s\n' "$expected" >"$marker"
+      log "[build] Migrated the compatible build cache; no full rebuild needed."
+    fi
+  fi
   if [ "$previous" != "$expected" ]; then
     if [ -n "$previous" ]; then
       log "[build] Humble build environment changed; invalidating stale cache."
@@ -446,6 +456,13 @@ revision=$source_revision"
     mkdir -p "$CACHE_WS"
     printf '%s\n' "$expected" >"$marker"
   fi
+}
+
+source_tree_fingerprint() {
+  local source_dir="$1"
+  find "$source_dir" -type f \
+      ! -path '*/__pycache__/*' ! -name '*.pyc' -print0 | \
+    LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}'
 }
 
 wait_parameter_value() {
@@ -788,11 +805,25 @@ touch "$DATABASE_COLOR_V4_MARKER"
 
 if is_true "$AUTO_BUILD" || [ ! -f "$INSTALL_BASE/setup.bash" ]; then
   log "[build] Building isolated STEP11 workspace..."
-  # Source files can arrive from Git with timestamps older than cached object
-  # files. Always rebuild this small C++ package from a clean package cache so
-  # a new launch file/YAML can never run against an old point-cloud executable.
-  reset_cached_package local_depth_cloud_cpp
-  log "[build] Cleared cached local_depth_cloud_cpp for version $LOCAL_CLOUD_PIPELINE_VERSION"
+  local_cloud_source_fingerprint="$(source_tree_fingerprint \
+    "$SOURCE_WS/src/local_depth_cloud_cpp")"
+  local_cloud_fingerprint_marker="$CACHE_WS/.local-depth-cloud-source.sha256"
+  previous_local_cloud_fingerprint=""
+  [ -f "$local_cloud_fingerprint_marker" ] && \
+    previous_local_cloud_fingerprint="$(cat "$local_cloud_fingerprint_marker")"
+  local_cloud_cached_bin="$INSTALL_BASE/local_depth_cloud_cpp/lib/local_depth_cloud_cpp/depth_image_to_local_cloud_v21_node"
+  if [ -z "$previous_local_cloud_fingerprint" ] && \
+      [ -x "$local_cloud_cached_bin" ] && \
+      grep -aFq "$LOCAL_CLOUD_PIPELINE_VERSION" "$local_cloud_cached_bin"; then
+    previous_local_cloud_fingerprint="$local_cloud_source_fingerprint"
+    printf '%s\n' "$local_cloud_source_fingerprint" > \
+      "$local_cloud_fingerprint_marker"
+    log "[build] Adopted the compatible cached local_depth_cloud_cpp binary."
+  fi
+  if [ "$previous_local_cloud_fingerprint" != "$local_cloud_source_fingerprint" ]; then
+    reset_cached_package local_depth_cloud_cpp
+    log "[build] local_depth_cloud_cpp source changed; rebuilding that package only."
+  fi
   build_paths=(
     "$SOURCE_WS/src/local_depth_cloud_cpp"
     "$SOURCE_WS/src/lidar_py"
@@ -811,6 +842,8 @@ if is_true "$AUTO_BUILD" || [ ! -f "$INSTALL_BASE/setup.bash" ]; then
     --install-base "$INSTALL_BASE" \
     --symlink-install \
     --packages-select "${build_packages[@]}"
+  printf '%s\n' "$local_cloud_source_fingerprint" > \
+    "$local_cloud_fingerprint_marker"
 fi
 [ -f "$INSTALL_BASE/setup.bash" ] || die "Build did not create $INSTALL_BASE/setup.bash"
 # shellcheck disable=SC1090
