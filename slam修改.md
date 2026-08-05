@@ -25,6 +25,16 @@
   `orbbec_camera_msgs` 和 `orbbec_camera` 到隔离缓存，并在成功加载新 overlay 后继续检查。
 - 已存在且可用的 Orbbec overlay 不会重复编译；系统 Orbbec SDK、udev 规则和相机参数不变。
 
+## 2026-08-05 V6.55：补齐 Gemini2 ARM64 运行时扩展
+
+- 分析 `dual_3d_2026-08-05_19-57-39`：Orbbec ROS 包已成功编译，但相机连续报
+  `depth frame processor not found (status:114)`，RGB/Depth 均为 0 Hz。
+- 根因是官方 Wrapper 内层 `.gitignore` 的通用 `*.so` 规则误排除了 ARM64
+  `frameprocessor`、`filters`、`firmwareupdater` 等运行时扩展；本地原文件存在，但 GitHub 新下载不完整。
+- 为 `orbbec_camera/SDK/lib/arm64` 增加精确白名单并补齐运行库；Humble CI 新增关键扩展完整性检查。
+- `pipeline_version` 的 ros2cli 查询延迟改为非致命，真正的 RGB、Depth 和实时点云消息仍是硬启动门槛。
+- 清除环境文件中的固定 RTAB-Map 2 Hz 覆盖，Jetson 现在实际使用 1 Hz，x86 工作站仍自动使用 2 Hz。
+
 ## 一、修改目标
 
 本次修改针对 `STEP11_CLEAN_VISUAL_LIDAR_SLAM_TEST.sh` 启动后地图立即旋转、发散和乱飘的问题，并将系统整理为三层感知结构：

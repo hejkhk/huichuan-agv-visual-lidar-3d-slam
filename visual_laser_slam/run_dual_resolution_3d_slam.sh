@@ -994,10 +994,14 @@ sleep 2
 if is_true "$USE_RVIZ" && ! kill -0 "$RVIZ_PID" 2>/dev/null; then
   die "RViz exited before the mapping stack became ready"
 fi
-wait_parameter_value \
-  /depth_image_to_local_cloud_v21 pipeline_version \
-  "$LOCAL_CLOUD_PIPELINE_VERSION" 30 || \
-  die "C++ point-cloud binary is stale or incompatible; movement is blocked"
+if ! wait_parameter_value \
+    /depth_image_to_local_cloud_v21 pipeline_version \
+    "$LOCAL_CLOUD_PIPELINE_VERSION" 30 WARNING; then
+  # The executable was already verified by an embedded version marker before
+  # launch. ros2cli service discovery can lag under Jetson startup load, so
+  # real RGB/depth/cloud messages below remain the authoritative readiness gate.
+  log "[WARNING] Point-cloud parameter query is delayed; waiting for real sensor data."
+fi
 wait_lidar_data /scan_timed_v2 20 || \
   die "LiDAR did not publish a valid /scan_timed_v2 revolution"
 if is_true "$ENABLE_FIXED_SCAN_FILTER"; then

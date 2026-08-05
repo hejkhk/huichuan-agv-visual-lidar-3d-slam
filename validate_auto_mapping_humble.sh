@@ -56,7 +56,10 @@ for file in \
   "$ORBBEC_SRC/orbbec_camera_msgs/package.xml" \
   "$ORBBEC_SRC/orbbec_description/package.xml" \
   "$ORBBEC_SRC/orbbec_camera/SDK/lib/arm64/libOrbbecSDK.so.2.9.3" \
-  "$ORBBEC_SRC/orbbec_camera/SDK/lib/arm64/extensions/depthengine/libdepthengine.so.2.0"; do
+  "$ORBBEC_SRC/orbbec_camera/SDK/lib/arm64/extensions/depthengine/libdepthengine.so.2.0" \
+  "$ORBBEC_SRC/orbbec_camera/SDK/lib/arm64/extensions/frameprocessor/libob_frame_processor.so" \
+  "$ORBBEC_SRC/orbbec_camera/SDK/lib/arm64/extensions/filters/libFilterProcessor.so" \
+  "$ORBBEC_SRC/orbbec_camera/SDK/lib/arm64/extensions/filters/libob_priv_filter.so"; do
   [ -r "$file" ] || fail "Missing Jetson Orbbec runtime file: $file"
 done
 pass "Jetson Orbbec wrapper and ARM64 SDK payload"

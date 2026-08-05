@@ -23,6 +23,12 @@ debian/
 *.dylib
 *.dll
 
+# The official Gemini2 wrapper loads these vendor runtime extensions at run
+# time. They are source payload for this ARM64 deployment, not local build
+# output, so a fresh Jetson clone must retain them.
+!orbbec_camera/SDK/lib/arm64/*.so
+!orbbec_camera/SDK/lib/arm64/extensions/**/*.so
+
 # Fortran module files
 *.mod
 *.smod
