@@ -7,6 +7,8 @@
   `orbbec_camera`、`orbbec_camera_msgs` 和 `orbbec_description`，避免把硬件或架构环境错误误判为项目失败。
 - CI 仍逐项验证三个 Orbbec ROS 包、ARM64 `libOrbbecSDK.so.2.9.3` 和 ARM64 深度引擎均已上传；
   项目自身的 Humble 包、定制行为树及 Nav2 lifecycle/pluginlib 测试仍完整执行。
+- CI 使用 `--packages-ignore` 而不是 `--packages-skip`：后者仍会让 `lidar_py` 等待未构建相机包的
+  ament 环境钩子，前者才会让硬件包完整退出 x86 runner 的依赖图。
 
 ## 一、修改目标
 

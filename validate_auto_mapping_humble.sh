@@ -246,11 +246,12 @@ pass "One-click and calibration script syntax"
 if [ "${1:-}" = "--build" ]; then
   declare -a BUILD_SELECTION=(--packages-up-to lidar_py)
   if [ "${CAR_VALIDATION_SKIP_EXTERNAL:-0}" = "1" ]; then
-    # orbbec_camera is an exec dependency of lidar_py, so --packages-up-to
-    # selects it unless explicitly excluded. The real driver is built and
-    # exercised on Jetson; this hosted x86 job validates project-owned code.
+    # orbbec_camera is an exec dependency of lidar_py. --packages-skip would
+    # leave it in colcon's dependency graph and make ament_python wait for its
+    # environment hooks, so CI must ignore these hardware packages entirely.
+    # The real driver is built and exercised on Jetson.
     BUILD_SELECTION+=(
-      --packages-skip orbbec_camera orbbec_camera_msgs orbbec_description
+      --packages-ignore orbbec_camera orbbec_camera_msgs orbbec_description
     )
   fi
   mkdir -p "$BUILD_ROOT"
