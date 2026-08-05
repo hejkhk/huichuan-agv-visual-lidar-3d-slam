@@ -225,6 +225,9 @@ for required in (
     "navigate_to_pose_humble.xml",
     "navigate_through_poses_humble.xml",
     "nav2_dual_3d_dwb_humble_override.yaml",
+    '"camera_time_domain", default_value="global"',
+    '"rgbd_sync_max_interval", default_value="0.045"',
+    '"max_input_age_ms": 250.0',
 ):
     if required not in dual:
         raise SystemExit(f"dual-resolution launch does not select {required}")

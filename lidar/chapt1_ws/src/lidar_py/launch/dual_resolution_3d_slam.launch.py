@@ -115,12 +115,13 @@ def generate_launch_description():
         DeclareLaunchArgument("depth_registration", default_value="false"),
         DeclareLaunchArgument("align_mode", default_value="SW"),
         DeclareLaunchArgument("align_target_stream", default_value="DEPTH"),
+        DeclareLaunchArgument("camera_time_domain", default_value="global"),
         DeclareLaunchArgument("camera_time_sync_period", default_value="10.0"),
         DeclareLaunchArgument("camera_enable_frame_drop_log", default_value="false"),
         DeclareLaunchArgument("camera_frame_timestamp_csv_file", default_value=""),
-        DeclareLaunchArgument("rgbd_sync_max_interval", default_value="0.030"),
-        DeclareLaunchArgument("rgbd_sync_max_interval_ms", default_value="30.0"),
-        DeclareLaunchArgument("rgbd_sync_warn_p95_ms", default_value="25.0"),
+        DeclareLaunchArgument("rgbd_sync_max_interval", default_value="0.045"),
+        DeclareLaunchArgument("rgbd_sync_max_interval_ms", default_value="45.0"),
+        DeclareLaunchArgument("rgbd_sync_warn_p95_ms", default_value="35.0"),
         DeclareLaunchArgument("camera_x", default_value="0.30"),
         DeclareLaunchArgument("camera_y", default_value="0.0"),
         DeclareLaunchArgument("camera_z", default_value="0.40"),
@@ -247,7 +248,10 @@ def generate_launch_description():
             "align_target_stream": LaunchConfiguration("align_target_stream"),
             "enable_frame_sync": "true",
             "enable_sync_host_time": "true",
-            "time_domain": "device",
+            # Global timestamps continuously convert the device clock into the
+            # host clock domain. Device-domain timerSyncWithHost() can jump
+            # timestamps while streaming and made live clouds pause for 8-12s.
+            "time_domain": LaunchConfiguration("camera_time_domain"),
             "time_sync_period": LaunchConfiguration("camera_time_sync_period"),
             "enable_frame_drop_log": LaunchConfiguration(
                 "camera_enable_frame_drop_log"),
@@ -348,7 +352,10 @@ def generate_launch_description():
             "persistent_mark_min_vertical_span_m": 0.060,
             "mark_geometry_neighbor_radius": 1,
             "transform_timeout": 0.50,
-            "max_input_age_ms": 150.0,
+            # Jetson end-to-end capture age is normally 145-185 ms. Stream
+            # freshness is independently guarded by a steady-clock watchdog,
+            # so this threshold should reject queued frames, not normal ones.
+            "max_input_age_ms": 250.0,
             # An invalid/black depth frame is not allowed to clear STVL memory.
             "min_clear_valid_depth_ratio": 0.05,
             "roi_u_min": 0, "roi_u_max": -1,
