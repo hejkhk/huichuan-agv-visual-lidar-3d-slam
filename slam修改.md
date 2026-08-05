@@ -10,6 +10,13 @@
 - CI 使用 `--packages-ignore` 而不是 `--packages-skip`：后者仍会让 `lidar_py` 等待未构建相机包的
   ament 环境钩子，前者才会让硬件包完整退出 x86 runner 的依赖图。
 
+## 2026-08-05 V6.53：Jetson 导航入口负载修正
+
+- 删除 `START_DUAL_2D_3D_NAVIGATION.sh` 中遗留的 RTX 3060 专用 `RTAB-Map 2 Hz` 强制覆盖。
+- 建图版和导航版现在都由统一 runner 自动判断平台：Jetson 使用 `1 Hz / 1 OMP线程`，
+  x86 PC 使用 `2 Hz / 2 OMP线程`。
+- 该频率只影响长期 RTAB-Map/OctoMap 更新；`640x400 @ 15 Hz`、3 cm 的实时碰撞点云保持不变。
+
 ## 一、修改目标
 
 本次修改针对 `STEP11_CLEAN_VISUAL_LIDAR_SLAM_TEST.sh` 启动后地图立即旋转、发散和乱飘的问题，并将系统整理为三层感知结构：
