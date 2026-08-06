@@ -238,6 +238,10 @@ for required in (
     "localization_map_server",
     "cartographer_reloc",
     "localization_bringup",
+    '"strong_match_score": 0.75',
+    '"strong_match_min_margin": 0.012',
+    '"depth_qos": "DEFAULT"',
+    '"depth_camera_info_qos": "DEFAULT"',
 ):
     if required not in dual:
         raise SystemExit(f"dual-resolution launch does not select {required}")
@@ -256,10 +260,16 @@ for service in ('"/get_trajectory_states"', '"/finish_trajectory"', '"/start_tra
     if service not in reloc:
         raise SystemExit(f"Humble relocalizer uses the wrong Cartographer service path: {service}")
 runner = (root.parents[3] / "visual_laser_slam" / "run_dual_resolution_3d_slam.sh").read_text(encoding="utf-8")
-if "wait_boolean_true /localization_ready 150" not in runner:
+if "while ! wait_boolean_true /localization_ready 150" not in runner:
     raise SystemExit("localization launcher must wait for the verified localization gate")
+if "Automatic match is still unverified" not in runner:
+    raise SystemExit("localization failure must preserve RViz manual recovery")
 if 'while [ "$SECONDS" -lt "$deadline" ]' not in runner:
     raise SystemExit("boolean readiness gate must keep sampling after its initial false value")
+if "strong_match_score" not in reloc or "strong_match_min_margin" not in reloc:
+    raise SystemExit("startup relocalizer is missing the guarded strong-match gate")
+if "retry_wait" not in reloc or "max_auto_attempts" not in reloc:
+    raise SystemExit("startup relocalizer is missing bounded automatic retries")
 if "wait_topic /cartographer_pose_odom 30" not in runner:
     raise SystemExit("mapping launcher must still verify Cartographer corrected pose")
 PY

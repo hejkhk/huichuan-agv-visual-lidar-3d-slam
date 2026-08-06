@@ -14,6 +14,13 @@ foreach ($Feature in $Features) {
 }
 
 $Docker = Get-Command docker -ErrorAction SilentlyContinue
+if (-not $Docker) {
+    $DockerBin = "C:\Program Files\Docker\Docker\resources\bin"
+    if (Test-Path (Join-Path $DockerBin "docker.exe")) {
+        $env:Path += ";$DockerBin"
+        $Docker = Get-Command docker -ErrorAction SilentlyContinue
+    }
+}
 Write-Host ("{0,-38} {1}" -f "Docker CLI", $(if ($Docker) { $Docker.Source } else { "MISSING" }))
 
 try {

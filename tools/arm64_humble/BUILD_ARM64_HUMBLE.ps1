@@ -9,7 +9,12 @@ $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $Dockerfile = Join-Path $PSScriptRoot "Dockerfile"
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw "Docker is not installed. Run CHECK_WINDOWS_PREREQUISITES.ps1 first."
+    $DockerBin = "C:\Program Files\Docker\Docker\resources\bin"
+    if (Test-Path (Join-Path $DockerBin "docker.exe")) {
+        $env:Path += ";$DockerBin"
+    } else {
+        throw "Docker is not installed. Run CHECK_WINDOWS_PREREQUISITES.ps1 first."
+    }
 }
 
 docker version | Out-Null

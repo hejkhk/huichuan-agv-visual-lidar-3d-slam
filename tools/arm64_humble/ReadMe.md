@@ -38,8 +38,14 @@ Orbbec wrapper/SDK dependency graph:
 .\tools\arm64_humble\BUILD_ARM64_HUMBLE.ps1 -Mode full
 ```
 
-Force a clean image build with `-NoCache`. The first emulated ARM64 build can
-take tens of minutes; later builds reuse Docker layers.
+Bypass Docker image-layer reuse with `-NoCache`. The first emulated ARM64 build
+can take tens of minutes; later builds reuse Docker layers.
+
+Source-only changes reuse both the `rosdep` image layer and a persistent
+BuildKit cache for the colcon `build/install/log` trees. Normal validation is
+therefore incremental. Use `-NoCache` only when auditing the container
+environment itself; the persistent colcon cache intentionally remains available
+so it does not turn every environment audit into a full ROS rebuild.
 
 `full` also verifies that the bundled Orbbec SDK ELF is AArch64 and that the
 `orbbec_camera` package is present in the resulting ROS overlay. A successful

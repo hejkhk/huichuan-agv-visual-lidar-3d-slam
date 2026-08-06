@@ -1169,8 +1169,11 @@ if is_true "$LOCALIZATION_MODE"; then
   # trajectory.  /cartographer_pose_odom is created only after the scan-to-map
   # relocalizer matches the frozen state, so waiting for it here deadlocks the
   # very node that must create it.
-  wait_boolean_true /localization_ready 150 || \
-    die "Cartographer startup relocalization did not verify"
+  while ! wait_boolean_true /localization_ready 150; do
+    kill -0 "$LAUNCH_PID" 2>/dev/null || \
+      die "ROS launch exited while waiting for startup relocalization"
+    log "[localization] Automatic match is still unverified; keeping RViz and the manual Relocalize control alive. Motion remains locked."
+  done
 else
   wait_topic /cartographer_pose_odom 30 || \
     die "Cartographer corrected pose did not start"

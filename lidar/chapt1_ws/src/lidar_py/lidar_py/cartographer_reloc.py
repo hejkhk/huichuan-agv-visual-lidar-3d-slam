@@ -55,6 +55,10 @@ class CartographerRelocalizer(Node):
         self.declare_parameter("min_valid_fraction", 0.65)
         self.declare_parameter("min_match_score", 0.28)
         self.declare_parameter("min_score_margin", 0.018)
+        self.declare_parameter("strong_match_score", 0.75)
+        self.declare_parameter("strong_match_min_margin", 0.012)
+        self.declare_parameter("auto_retry_interval_sec", 5.0)
+        self.declare_parameter("max_auto_attempts", 5)
         self.declare_parameter("max_wait_sec", 120.0)
         self.declare_parameter("stationary_hold_sec", 1.0)
         self.declare_parameter("verify_hold_sec", 2.0)
@@ -83,6 +87,14 @@ class CartographerRelocalizer(Node):
         self.min_score = float(self.get_parameter("min_match_score").value)
         self.min_margin = float(
             self.get_parameter("min_score_margin").value)
+        self.strong_match_score = float(
+            self.get_parameter("strong_match_score").value)
+        self.strong_match_min_margin = float(
+            self.get_parameter("strong_match_min_margin").value)
+        self.auto_retry_interval_sec = max(1.0, float(
+            self.get_parameter("auto_retry_interval_sec").value))
+        self.max_auto_attempts = max(
+            1, int(self.get_parameter("max_auto_attempts").value))
         self.max_wait_sec = float(self.get_parameter("max_wait_sec").value)
         self.stationary_hold_sec = float(
             self.get_parameter("stationary_hold_sec").value)
@@ -145,6 +157,8 @@ class CartographerRelocalizer(Node):
         self.expected_pose = None
         self.active_trajectory_id = None
         self.reference_trajectory_id = None
+        self.search_attempts = 0
+        self.next_search_at = 0.0
         self._last_logged_state = None
 
         self._publish_ready(False)
@@ -188,6 +202,8 @@ class CartographerRelocalizer(Node):
         self.pending_search = True
         self.started_at = time.monotonic()
         self.verify_since = None
+        self.search_attempts = 0
+        self.next_search_at = 0.0
         self.state = "waiting_stop"
         self.detail = "manual request; Nav2 paused"
         self._publish_ready(False)
@@ -197,6 +213,8 @@ class CartographerRelocalizer(Node):
             self._verify_pose()
             return
         if not self.pending_search or self.busy:
+            return
+        if time.monotonic() < self.next_search_at:
             return
         if time.monotonic() - self.started_at > self.max_wait_sec:
             self.state = "failed"
@@ -292,6 +310,7 @@ class CartographerRelocalizer(Node):
             self.detail = "not enough valid scan points or laser TF"
             return
         self.busy = True
+        self.search_attempts += 1
         self.state = "searching"
         self.detail = "global scan-to-map search"
         self._publish_state()
@@ -300,11 +319,26 @@ class CartographerRelocalizer(Node):
         self.second_score = second
         if pose is None:
             self.busy = False
-            self.pending_search = False
-            self.state = "failed"
-            self.detail = (
-                f"ambiguous/weak match best={best:.3f} second={second:.3f}; "
-                "move to a more distinctive stationary location and retry")
+            retry_available = (
+                not self.manual_request
+                and self.search_attempts < self.max_auto_attempts
+                and time.monotonic() - self.started_at < self.max_wait_sec)
+            if retry_available:
+                self.pending_search = True
+                self.next_search_at = (
+                    time.monotonic() + self.auto_retry_interval_sec)
+                self.state = "retry_wait"
+                self.detail = (
+                    f"ambiguous/weak match best={best:.3f} "
+                    f"second={second:.3f}; automatic retry "
+                    f"{self.search_attempts + 1}/{self.max_auto_attempts}")
+            else:
+                self.pending_search = False
+                self.state = "failed"
+                self.detail = (
+                    f"ambiguous/weak match best={best:.3f} "
+                    f"second={second:.3f}; use RViz Relocalize at a more "
+                    "distinctive stationary location")
             self._publish_ready(False)
             return
         self.expected_pose = pose
@@ -387,8 +421,16 @@ class CartographerRelocalizer(Node):
         self.get_logger().info(
             f"Relocalization match: best={score:.3f}, second={second:.3f}, "
             f"margin={margin:.3f}")
-        if score < self.min_score or margin < self.min_margin:
+        normal_match = score >= self.min_score and margin >= self.min_margin
+        strong_match = (
+            score >= self.strong_match_score
+            and margin >= self.strong_match_min_margin)
+        if not (normal_match or strong_match):
             return None, score, second
+        if strong_match and not normal_match:
+            self.get_logger().warn(
+                "Accepting high-confidence match through strong-score gate: "
+                f"score={score:.3f} margin={margin:.3f}")
         x = origin_x + col * resolution
         y = origin_y + row * resolution
         return self._pose(x, y, yaw), score, second

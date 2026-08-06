@@ -293,6 +293,13 @@ def generate_launch_description():
             "laser_frame": "laser_frame",
             "configuration_directory": os.path.join(pkg_dir, "config"),
             "configuration_basename": "cartographer_2d_localization.lua",
+            # A strong scan fit may have two nearby candidates in a corridor.
+            # Keep the normal gate strict and permit only a high-score,
+            # non-zero-margin fallback validated again after trajectory start.
+            "strong_match_score": 0.75,
+            "strong_match_min_margin": 0.012,
+            "auto_retry_interval_sec": 5.0,
+            "max_auto_attempts": 5,
         }],
     )
 
@@ -315,13 +322,16 @@ def generate_launch_description():
             # Image streams are lossy sensor data. Reliable QoS can back-pressure
             # the Gemini2 driver when RTAB-Map or RViz is slower than the camera.
             "color_qos": "SENSOR_DATA",
-            "color_camera_info_qos": "SENSOR_DATA",
+            "color_camera_info_qos": "DEFAULT",
             "enable_depth": "true",
             "depth_width": LaunchConfiguration("depth_width"),
             "depth_height": LaunchConfiguration("depth_height"),
             "depth_fps": LaunchConfiguration("depth_fps"),
-            "depth_qos": "SENSOR_DATA",
-            "depth_camera_info_qos": "SENSOR_DATA",
+            # Humble depth_image_proc::RegisterNode creates reliable input
+            # subscriptions. Matching reliable camera publishers prevents the
+            # silent RTAB-Map registered-depth starvation seen on Jetson.
+            "depth_qos": "DEFAULT",
+            "depth_camera_info_qos": "DEFAULT",
             "depth_registration": LaunchConfiguration("depth_registration"),
             "align_mode": LaunchConfiguration("align_mode"),
             "align_target_stream": LaunchConfiguration("align_target_stream"),
