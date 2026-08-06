@@ -32,6 +32,8 @@ def generate_launch_description():
     pkg_dir = get_package_share_directory("lidar_py")
     stable_2d_launch = os.path.join(
         pkg_dir, "launch", "cartographer_scan_v2_launch.py")
+    localization_2d_launch = os.path.join(
+        pkg_dir, "launch", "cartographer_scan_v2_localization_launch.py")
     navigation_launch = os.path.join(
         pkg_dir, "launch", "cartographer_auto_mapping_humble_launch.py")
     project_bt_dir = os.path.join(pkg_dir, "behavior_trees")
@@ -51,6 +53,12 @@ def generate_launch_description():
         DeclareLaunchArgument("use_rviz", default_value="true"),
         DeclareLaunchArgument("enable_navigation", default_value="false"),
         DeclareLaunchArgument("nav_autostart", default_value="true"),
+        DeclareLaunchArgument("localization_mode", default_value="false"),
+        DeclareLaunchArgument("localization_map_yaml", default_value=""),
+        DeclareLaunchArgument(
+            "cartographer_load_state_filename", default_value=""),
+        DeclareLaunchArgument(
+            "rviz_config_file", default_value=rviz_config),
         DeclareLaunchArgument(
             "cartographer_config",
             default_value="cartographer_2d_v9_tightened.lua"),
@@ -170,9 +178,7 @@ def generate_launch_description():
         DeclareLaunchArgument("local_voxel_min_neighbors", default_value="1"),
     ]
 
-    stable_2d = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(stable_2d_launch),
-        launch_arguments={
+    stable_2d_arguments = {
             "use_rviz": "false",
             "lidar_serial_port": LaunchConfiguration("lidar_serial_port"),
             "lidar_baudrate": LaunchConfiguration("lidar_baudrate"),
@@ -222,7 +228,80 @@ def generate_launch_description():
             "filtered_scan_topic": LaunchConfiguration("filtered_scan_topic"),
             "cartographer_config": LaunchConfiguration(
                 "cartographer_config"),
-        }.items(),
+            "cartographer_load_state_filename": LaunchConfiguration(
+                "cartographer_load_state_filename"),
+            "occupancy_grid_topic": PythonExpression([
+                "'/cartographer_localization_map' if '",
+                LaunchConfiguration("localization_mode"),
+                "' == 'true' else '/map'"
+            ]),
+        }
+
+    stable_2d = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(stable_2d_launch),
+        condition=IfCondition(PythonExpression([
+            "'", LaunchConfiguration("localization_mode"), "' != 'true'"
+        ])),
+        launch_arguments=stable_2d_arguments.items(),
+    )
+
+    localization_2d = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(localization_2d_launch),
+        condition=IfCondition(LaunchConfiguration("localization_mode")),
+        launch_arguments=stable_2d_arguments.items(),
+    )
+
+    localization_map_server = Node(
+        package="nav2_map_server",
+        executable="map_server",
+        name="localization_map_server",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("localization_mode")),
+        parameters=[{
+            "use_sim_time": False,
+            "yaml_filename": LaunchConfiguration("localization_map_yaml"),
+            "topic_name": "/map",
+            "frame_id": "map",
+        }],
+    )
+
+    localization_map_lifecycle = Node(
+        package="nav2_lifecycle_manager",
+        executable="lifecycle_manager",
+        name="lifecycle_manager_localization_map",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("localization_mode")),
+        parameters=[{
+            "use_sim_time": False,
+            "autostart": True,
+            "bond_timeout": 0.0,
+            "node_names": ["localization_map_server"],
+        }],
+    )
+
+    cartographer_reloc = Node(
+        package="lidar_py",
+        executable="cartographer_reloc",
+        name="cartographer_reloc",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("localization_mode")),
+        parameters=[{
+            "map_topic": "/map",
+            "scan_topic": LaunchConfiguration("filtered_scan_topic"),
+            "odom_topic": "/odom",
+            "base_frame": "base_link",
+            "laser_frame": "laser_frame",
+            "configuration_directory": os.path.join(pkg_dir, "config"),
+            "configuration_basename": "cartographer_2d_localization.lua",
+        }],
+    )
+
+    localization_bringup = Node(
+        package="lidar_py",
+        executable="localization_bringup",
+        name="localization_bringup",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("localization_mode")),
     )
 
     camera = IncludeLaunchDescription(
@@ -733,7 +812,7 @@ def generate_launch_description():
         executable="rviz2",
         name="rviz2_dual_resolution_3d",
         output="screen",
-        arguments=["-d", rviz_config],
+        arguments=["-d", LaunchConfiguration("rviz_config_file")],
         condition=IfCondition(LaunchConfiguration("use_rviz")),
     )
 
@@ -770,6 +849,11 @@ def generate_launch_description():
             LaunchConfiguration("cartographer_config"),
         ]),
         stable_2d,
+        localization_2d,
+        localization_map_server,
+        localization_map_lifecycle,
+        cartographer_reloc,
+        localization_bringup,
         camera,
         base_to_camera,
         robot_state_publisher,

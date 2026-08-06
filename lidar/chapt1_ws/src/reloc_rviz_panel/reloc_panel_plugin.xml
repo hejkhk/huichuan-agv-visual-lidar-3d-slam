@@ -1,0 +1,8 @@
+<library path="reloc_rviz_panel">
+  <class
+    name="reloc_rviz_panel/RelocPanel"
+    type="reloc_rviz_panel::RelocPanel"
+    base_class_type="rviz_common::Panel">
+    <description>Verified Cartographer relocalization control and status</description>
+  </class>
+</library>

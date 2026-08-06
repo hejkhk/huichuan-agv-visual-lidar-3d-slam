@@ -4,7 +4,8 @@ set -Eeo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 export DUAL_3D_ENABLE_NAVIGATION=true
-export USE_RVIZ=true
+export DUAL_3D_STACK_MODE=navigation
+export USE_RVIZ="${USE_RVIZ:-true}"
 # Navigation-specific pose-graph guard. Mapping-only startup keeps the
 # finalized V9 Cartographer profile unchanged.
 export DUAL_3D_CARTOGRAPHER_CONFIG=cartographer_2d_v9_nav_guarded.lua

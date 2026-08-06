@@ -11,7 +11,8 @@ fi
 
 # Keep execution independent of the terminal's current directory.
 cd "$ROOT_DIR"
-export USE_RVIZ=true
+export DUAL_3D_STACK_MODE=slam
+export USE_RVIZ="${USE_RVIZ:-true}"
 export DUAL_3D_ENABLE_NAVIGATION=false
 export DUAL_3D_CARTOGRAPHER_CONFIG=cartographer_2d_v9_tightened.lua
 exec bash "$RUNNER"

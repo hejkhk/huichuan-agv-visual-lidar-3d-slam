@@ -94,6 +94,12 @@ fi
 for file in \
   "$LIDAR_SRC/launch/cartographer_auto_mapping_humble_launch.py" \
   "$LIDAR_SRC/launch/dual_resolution_3d_slam.launch.py" \
+  "$LIDAR_SRC/launch/cartographer_scan_v2_localization_launch.py" \
+  "$LIDAR_SRC/config/cartographer_2d_localization.lua" \
+  "$LIDAR_SRC/lidar_py/cartographer_reloc.py" \
+  "$LIDAR_SRC/lidar_py/localization_bringup.py" \
+  "$LIDAR_SRC/rviz/dual_resolution_3d_localization.rviz" \
+  "$ROOT_DIR/lidar/chapt1_ws/src/reloc_rviz_panel/reloc_panel_plugin.xml" \
   "$LIDAR_SRC/config/nav2_auto_mapping_humble.yaml" \
   "$LIDAR_SRC/config/nav2_dual_3d_dwb_humble_override.yaml" \
   "$LIDAR_SRC/config/nav2_dual_3d_stvl_override.yaml" \
@@ -228,6 +234,10 @@ for required in (
     '"camera_time_domain", default_value="global"',
     '"rgbd_sync_max_interval", default_value="0.045"',
     '"max_input_age_ms": 250.0',
+    "cartographer_scan_v2_localization_launch.py",
+    "localization_map_server",
+    "cartographer_reloc",
+    "localization_bringup",
 ):
     if required not in dual:
         raise SystemExit(f"dual-resolution launch does not select {required}")
@@ -242,6 +252,7 @@ for script in \
   "$ROOT_DIR/open_all.sh" "$ROOT_DIR/open_all_log.sh" \
   "$ROOT_DIR/START_DUAL_2D_3D_MAPPING.sh" \
   "$ROOT_DIR/START_DUAL_2D_3D_NAVIGATION.sh" \
+  "$ROOT_DIR/START_DUAL_2D_3D_LOCALIZATION.sh" \
   "$ROOT_DIR/visual_laser_slam/run_dual_resolution_3d_slam.sh" \
   "$ROOT_DIR/CALIBRATE_CAMERA_EXTRINSIC.sh" \
   "$ROOT_DIR/CALIBRATE_CAMERA_YAW.sh"; do
@@ -250,7 +261,9 @@ done
 pass "One-click and calibration script syntax"
 
 if [ "${1:-}" = "--build" ]; then
-  declare -a BUILD_SELECTION=(--packages-up-to lidar_py)
+  # reloc_rviz_panel is a UI plugin rather than a dependency of lidar_py, so
+  # name it explicitly or hosted CI could pass without ever compiling it.
+  declare -a BUILD_SELECTION=(--packages-up-to lidar_py reloc_rviz_panel)
   if [ "${CAR_VALIDATION_SKIP_EXTERNAL:-0}" = "1" ]; then
     # orbbec_camera is an exec dependency of lidar_py. --packages-skip would
     # leave it in colcon's dependency graph and make ament_python wait for its

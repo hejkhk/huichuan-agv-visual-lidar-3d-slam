@@ -5,7 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 export DUAL_3D_ENABLE_NAVIGATION=true
 export DUAL_3D_ENABLE_VISUAL_FUSION=true
-export USE_RVIZ=true
+export DUAL_3D_STACK_MODE=navigation_visual_fusion
+export USE_RVIZ="${USE_RVIZ:-true}"
 # Use exactly the same guarded Cartographer/Nav2 profile as the stable
 # navigation launcher. The only A/B variable is the odom prediction source.
 export DUAL_3D_CARTOGRAPHER_CONFIG=cartographer_2d_v9_nav_guarded.lua

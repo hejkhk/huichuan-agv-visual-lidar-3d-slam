@@ -18,6 +18,12 @@ OCTOMAP_OUTPUT_PATH=""
 STOP_REASON="unexpected_shell_exit"
 SHUTDOWN_REQUESTED=false
 LOCAL_CLOUD_PIPELINE_VERSION="v6.34"
+STACK_MODE="${DUAL_3D_STACK_MODE:-unknown}"
+STACK_STATE_DIR="$HOME/.cache/huichuan_agv"
+STACK_PID_FILE="$STACK_STATE_DIR/launcher.pid"
+STACK_MODE_FILE="$STACK_STATE_DIR/mode"
+STACK_ROOT_FILE="$STACK_STATE_DIR/project_root"
+STACK_RUN_DIR_FILE="$STACK_STATE_DIR/run_dir"
 
 log() {
   printf '%s\n' "$*"
@@ -27,6 +33,15 @@ log() {
 }
 is_true() { case "${1,,}" in 1|true|yes|on) return 0;; *) return 1;; esac; }
 deg_to_rad() { awk -v degrees="$1" 'BEGIN { printf "%.9f", degrees * 3.141592653589793 / 180.0 }'; }
+
+clear_stack_state() {
+  local registered_pid=""
+  [ -r "$STACK_PID_FILE" ] && registered_pid="$(cat "$STACK_PID_FILE" 2>/dev/null || true)"
+  if [ "$registered_pid" = "$$" ]; then
+    rm -f -- "$STACK_PID_FILE" "$STACK_MODE_FILE" \
+      "$STACK_ROOT_FILE" "$STACK_RUN_DIR_FILE"
+  fi
+}
 
 rviz_supervisor() {
   set +e
@@ -120,6 +135,7 @@ cleanup() {
     kill -KILL -- "-$LAUNCH_PID" 2>/dev/null || true
   fi
   [ -n "$LAUNCH_PID" ] && wait "$LAUNCH_PID" 2>/dev/null || true
+  clear_stack_state
   log "[stop] Complete. RTAB-Map database: $DATABASE_PATH"
   log "[stop] Runtime log: $RUNTIME_LOG"
   exit "$code"
@@ -187,17 +203,32 @@ USE_RVIZ=true
 USE_RTABMAP_VIZ="${USE_RTABMAP_VIZ:-false}"
 ENABLE_RTABMAP="${ENABLE_RTABMAP:-true}"
 ENABLE_NAVIGATION="${DUAL_3D_ENABLE_NAVIGATION:-${ENABLE_NAVIGATION:-false}}"
+LOCALIZATION_MODE="${DUAL_3D_LOCALIZATION_MODE:-false}"
+LOCALIZATION_MAP_YAML="${DUAL_3D_LOCALIZATION_MAP_YAML:-}"
+LOCALIZATION_PBSTREAM="${DUAL_3D_LOCALIZATION_PBSTREAM:-}"
+RVIZ_CONFIG_FILE="${DUAL_3D_RVIZ_CONFIG_FILE:-$SOURCE_WS/src/lidar_py/rviz/dual_resolution_3d_slam.rviz}"
 # A direct call to this runner with navigation enabled must not silently use
 # the mapping-only loop-closure threshold. An explicit DUAL_3D override remains
 # available for controlled experiments.
 if is_true "$ENABLE_NAVIGATION"; then
-  CARTOGRAPHER_CONFIG="${DUAL_3D_CARTOGRAPHER_CONFIG:-cartographer_2d_v9_nav_guarded.lua}"
+  if is_true "$LOCALIZATION_MODE"; then
+    CARTOGRAPHER_CONFIG="cartographer_2d_localization.lua"
+  else
+    CARTOGRAPHER_CONFIG="${DUAL_3D_CARTOGRAPHER_CONFIG:-cartographer_2d_v9_nav_guarded.lua}"
+  fi
   # Keep NavigateToPose inactive while host Twist output is gated. PS2 remains
   # available during this staged startup; Nav2 activates only after mapping,
   # perception and the hard collision input have produced data.
   NAV_AUTOSTART=false
 else
   NAV_AUTOSTART=true
+fi
+
+if is_true "$LOCALIZATION_MODE"; then
+  [ -f "$LOCALIZATION_MAP_YAML" ] || \
+    die "Localization map YAML not found: ${LOCALIZATION_MAP_YAML:-unset}"
+  [ -f "$LOCALIZATION_PBSTREAM" ] || \
+    die "Localization pbstream not found: ${LOCALIZATION_PBSTREAM:-unset}"
 fi
 AUTO_BUILD="${AUTO_BUILD:-true}"
 LIDAR_BAUD="${LIDAR_BAUD:-115200}"
@@ -277,6 +308,23 @@ wait_topic() {
   return 1
 }
 
+wait_boolean_true() {
+  local topic="$1" timeout_sec="${2:-120}" output=""
+  output="$(timeout --signal=TERM --kill-after=2s "${timeout_sec}s" \
+    ros2 topic echo "$topic" --once \
+      --qos-reliability reliable \
+      --qos-durability transient_local 2>/dev/null || true)"
+  printf '%s\n' "$output" | grep -Eiq 'data:[[:space:]]*true'
+}
+
+wait_transient_topic() {
+  local topic="$1" timeout_sec="${2:-45}"
+  timeout --signal=TERM --kill-after=2s "${timeout_sec}s" \
+    ros2 topic echo "$topic" --once \
+      --qos-reliability reliable \
+      --qos-durability transient_local >/dev/null 2>&1
+}
+
 wait_graph_name() {
   local graph_kind="$1" name="$2" timeout_sec="${3:-45}" output=""
   local deadline=$((SECONDS + timeout_sec))
@@ -301,6 +349,23 @@ require_lifecycle_active() {
     return 0
   fi
   log "[ERROR] lifecycle $node is not active: ${state:-no response}"
+  return 1
+}
+
+wait_lifecycle_active() {
+  local node="$1" timeout_sec="${2:-45}" state=""
+  local deadline=$((SECONDS + timeout_sec))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    state="$(timeout --signal=TERM --kill-after=1s 5s \
+      ros2 lifecycle get "$node" 2>&1 || true)"
+    if printf '%s\n' "$state" | \
+        grep -Eiq '(^|[[:space:]])active[[:space:]]*\[3\]'; then
+      log "[ready] lifecycle $node = active"
+      return 0
+    fi
+    sleep 1
+  done
+  log "[ERROR] lifecycle $node did not become active: ${state:-no response}"
   return 1
 }
 
@@ -660,6 +725,15 @@ auto_detect_ports
 mkdir -p "$RUN_DIR" "$(dirname "$DATABASE_PATH")" "$CACHE_WS"
 : >"$RUNTIME_LOG"
 printf '%s\n' "$$" >"$RUN_DIR/launcher.pid"
+mkdir -p "$STACK_STATE_DIR"
+printf '%s\n' "$$" >"$STACK_PID_FILE.tmp"
+printf '%s\n' "$STACK_MODE" >"$STACK_MODE_FILE.tmp"
+printf '%s\n' "$ROOT_DIR" >"$STACK_ROOT_FILE.tmp"
+printf '%s\n' "$RUN_DIR" >"$STACK_RUN_DIR_FILE.tmp"
+mv -f "$STACK_PID_FILE.tmp" "$STACK_PID_FILE"
+mv -f "$STACK_MODE_FILE.tmp" "$STACK_MODE_FILE"
+mv -f "$STACK_ROOT_FILE.tmp" "$STACK_ROOT_FILE"
+mv -f "$STACK_RUN_DIR_FILE.tmp" "$STACK_RUN_DIR_FILE"
 
 [ -f /opt/ros/humble/setup.bash ] || die "ROS 2 Humble was not found at /opt/ros/humble"
 # shellcheck disable=SC1091
@@ -716,6 +790,13 @@ if is_true "$ENABLE_NAVIGATION"; then
     check_pkg spatio_temporal_voxel_layer
   fi
 fi
+if is_true "$LOCALIZATION_MODE"; then
+  for pkg in cartographer_ros_msgs nav2_map_server nav2_lifecycle_manager; do
+    check_pkg "$pkg"
+  done
+  python3 -c 'import scipy.ndimage' >/dev/null 2>&1 || \
+    die "Missing python3-scipy. Install it once: sudo apt install python3-scipy"
+fi
 if is_true "$ENABLE_VISUAL_FUSION"; then
   check_pkg rtabmap_odom
   check_pkg robot_localization
@@ -728,8 +809,8 @@ fi
 
 # RViz is intentionally owned by this outer runner and opened before colcon or
 # the sensor stack. It can wait for the map/TF topics while the rest starts.
-if is_true "$USE_RVIZ"; then
-  rviz_config="$SOURCE_WS/src/lidar_py/rviz/dual_resolution_3d_slam.rviz"
+if is_true "$USE_RVIZ" && ! is_true "$LOCALIZATION_MODE"; then
+  rviz_config="$RVIZ_CONFIG_FILE"
   [ -f "$rviz_config" ] || die "RViz profile is missing: $rviz_config"
   log "[rviz] Opening the 2D/3D view first; map and TF will appear when ROS is ready."
   rviz_supervisor &
@@ -836,6 +917,10 @@ if is_true "$AUTO_BUILD" || [ ! -f "$INSTALL_BASE/setup.bash" ]; then
     )
     build_packages+=(frontier_exploration_ros2 short_goal_bt)
   fi
+  if is_true "$LOCALIZATION_MODE"; then
+    build_paths+=("$SOURCE_WS/src/reloc_rviz_panel")
+    build_packages+=(reloc_rviz_panel)
+  fi
   PYTHONNOUSERSITE=1 colcon --log-base "$LOG_BASE" build \
     --base-paths "${build_paths[@]}" \
     --build-base "$BUILD_BASE" \
@@ -850,6 +935,16 @@ fi
 source "$INSTALL_BASE/setup.bash"
 check_pkg lidar_py
 check_pkg local_depth_cloud_cpp
+if is_true "$LOCALIZATION_MODE"; then
+  check_pkg reloc_rviz_panel
+fi
+if is_true "$USE_RVIZ" && is_true "$LOCALIZATION_MODE"; then
+  rviz_config="$RVIZ_CONFIG_FILE"
+  [ -f "$rviz_config" ] || die "RViz profile is missing: $rviz_config"
+  log "[rviz] Opening localization view after the manual-panel plugin build."
+  rviz_supervisor &
+  RVIZ_PID=$!
+fi
 LOCAL_CLOUD_BIN="$(ros2 pkg prefix local_depth_cloud_cpp)/lib/local_depth_cloud_cpp/depth_image_to_local_cloud_v21_node"
 [ -x "$LOCAL_CLOUD_BIN" ] || \
   die "C++ point-cloud node is missing after build: $LOCAL_CLOUD_BIN"
@@ -887,7 +982,7 @@ log "  3D database     : $DATABASE_PATH"
 log "  Local 3D        : ${LOCAL_CLOUD_TOPIC:-/local_highres_cloud_v21} @ ${LOCAL_RATE:-15.0} Hz"
 if is_true "$ENABLE_NAVIGATION" && is_true "$ENABLE_STVL"; then
   log "  Obstacle memory : hard stop=1 frame; Nav2 mark=3 frames + geometry guard"
-  log "                    RGB-D obstacles decay local/global=4s/8s"
+  log "                    RGB-D obstacles decay local/global=6s/8s"
   log "                    /map walls >=65% persist; filtered RTAB walls hold 15s"
   log "  Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0"
 fi
@@ -905,6 +1000,11 @@ log "  NAVI watchdog   : ${NAVI_MOTION_WATCHDOG_ENABLED:-true}, ${NAVI_MOTION_WA
 log "  LiDAR           : $LIDAR_PORT @ $LIDAR_BAUD"
 log "  STM32           : $CHASSIS_PORT @ 115200"
 log "  RViz            : $USE_RVIZ"
+log "  Localization    : $LOCALIZATION_MODE"
+if is_true "$LOCALIZATION_MODE"; then
+  log "  Static map      : $LOCALIZATION_MAP_YAML"
+  log "  Frozen state    : $LOCALIZATION_PBSTREAM"
+fi
 log "  Platform        : $([ "$JETSON_PLATFORM" = true ] && printf 'Jetson' || printf 'generic')"
 log "  RTAB workers    : $RTABMAP_THREADS"
 log "  Runtime log     : $RUNTIME_LOG"
@@ -924,6 +1024,10 @@ cmd=(ros2 launch lidar_py dual_resolution_3d_slam.launch.py
   "use_rviz:=false"
   "enable_navigation:=$ENABLE_NAVIGATION"
   "nav_autostart:=$NAV_AUTOSTART"
+  "localization_mode:=$LOCALIZATION_MODE"
+  "localization_map_yaml:=$LOCALIZATION_MAP_YAML"
+  "cartographer_load_state_filename:=$LOCALIZATION_PBSTREAM"
+  "rviz_config_file:=$RVIZ_CONFIG_FILE"
   "cartographer_config:=$CARTOGRAPHER_CONFIG"
   "enable_visual_fusion:=$ENABLE_VISUAL_FUSION"
   "chassis_publish_tf:=$CHASSIS_PUBLISH_TF"
@@ -1049,7 +1153,12 @@ wait_topic /imu_cartographer 20 || \
   die "STM32 planar IMU /imu_cartographer did not start"
 wait_topic /cartographer_pose_odom 30 || \
   die "Cartographer corrected pose did not start"
-wait_topic /map 30 || die "Cartographer occupancy map did not start"
+if is_true "$LOCALIZATION_MODE"; then
+  wait_transient_topic /map 30 || \
+    die "Static localization map server did not publish /map"
+else
+  wait_topic /map 30 || die "Cartographer occupancy map did not start"
+fi
 
 log "[startup] Verifying Gemini2 and the live collision cloud..."
 wait_topic /camera/color/image_raw 60 || die "Gemini2 RGB stream did not start"
@@ -1067,8 +1176,16 @@ if is_true "$ENABLE_NAVIGATION"; then
     die "Recent geometry-filtered navigation cloud did not start"
   wait_topic /local_cloud_collision_stop 30 || \
     die "C++ local collision gate did not start"
-  start_navigation_lifecycle || \
-    die "Nav2 lifecycle activation failed; movement remains locked"
+  if is_true "$LOCALIZATION_MODE"; then
+    log "[localization] Waiting for a verified scan-to-map match..."
+    wait_boolean_true /localization_ready 150 || \
+      die "Relocalization was not verified; Nav2 and host motion remain locked"
+    wait_lifecycle_active /controller_server 60 || \
+      die "Relocalization succeeded but Nav2 did not become active"
+  else
+    start_navigation_lifecycle || \
+      die "Nav2 lifecycle activation failed; movement remains locked"
+  fi
   # Nested costmap parameter services do not exist until the
   # controller/planner lifecycle nodes have been configured. Source YAML was
   # checked before launch, so release immediately after lifecycle startup and

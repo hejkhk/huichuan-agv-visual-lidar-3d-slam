@@ -44,7 +44,7 @@ local_costmap:
         # Low obstacle memory survives a camera turn, but expires if it is never
         # observed again. This prevents repeatable floor-depth artifacts from
         # accumulating into an all-blue/purple local costmap.
-        voxel_decay: 4.0
+        voxel_decay: 6.0
         decay_model: 0
         voxel_size: 0.03
         # This is a forward-only RGB-D layer. Treating every unobserved side

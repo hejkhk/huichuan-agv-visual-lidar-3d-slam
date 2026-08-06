@@ -1,6 +1,7 @@
 #include "short_goal_bt/short_goal_behind_condition.hpp"
 #include "short_goal_bt/initial_path_pre_rotate_condition.hpp"
 #include "short_goal_bt/reverse_escape_monitor.hpp"
+#include "short_goal_bt/recovery_status_action.hpp"
 #include "short_goal_bt/spin_safety_condition.hpp"
 
 #include <algorithm>
@@ -99,4 +100,5 @@ BT_REGISTER_NODES(factory)
   factory.registerNodeType<short_goal_bt::ControllerSelectedCondition>("ControllerSelected");
   factory.registerNodeType<short_goal_bt::ReverseEscapeCompletedCondition>(
     "ReverseEscapeCompleted");
+  factory.registerNodeType<short_goal_bt::RecoveryStatusAction>("RecoveryStatus");
 }

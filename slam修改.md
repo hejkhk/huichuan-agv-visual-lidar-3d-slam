@@ -4205,3 +4205,49 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
   供电和是否存在第二个串口读取进程，软件安全看门狗继续在断流时停车。
 - GitHub Humble 预检跳过仅由外部 Orbbec/Cartographer 源码引入的 `libgoogle-glog-dev`；
   避免 hosted runner 的 `libunwind` 冲突在项目编译前误报失败，不改变 Jetson 安装脚本。
+## 2026-08-05 Jetson 障碍记忆 V6.18
+
+- Nav2 局部 RGB-D 低矮障碍记忆由 `4 s` 延长为 `6 s`，减少车辆转弯、相机短暂卡帧或障碍进入近场盲区后过早清除的问题。
+- 全局 RGB-D 障碍记忆继续保持 `8 s`，RTAB 过滤墙体继续保持 `15 s`，单帧碰撞急停保持 `0.25 s`；没有把动态障碍永久写死。
+- 同步更新 RViz 显示名称与一键启动摘要，避免运行界面继续显示旧的 `4 s`。
+
+## 2026-08-06 启动重定位与静态地图导航
+
+- 根目录新增 `Loc_MAP/`，默认读取同一建图会话生成的 `map.yaml`、地图图像和
+  `map.pbstream`；也可向启动脚本传入其他文件基名。
+- 新增 `START_DUAL_2D_3D_LOCALIZATION.sh`。它复用现有完整 2D/3D、视觉避障、Nav2
+  和底盘安全链路，不另建删减版 launch。
+- Cartographer 重定位模式加载冻结 PBSTREAM，同时建立一条新的活动轨迹；静态 PGM/YAML
+  由独立 map_server 发布 `/map`，Cartographer 的动态栅格改发
+  `/cartographer_localization_map`，避免双发布者覆盖。
+- 从 `all.beifen` 的扫描栅格匹配方法重写 `cartographer_reloc`：自动查询真实活动/冻结轨迹
+  ID，执行全局粗搜与精配准，检查最低得分和候选歧义度。匹配失败时保持 Nav2 和主机运动
+  锁定，禁止“未验证也放行”。
+- 自动全局重定位只在冷启动执行。运行中不再按分数自动重启轨迹；只有重定位版 RViz 的
+  `Verified Relocalization` 按钮可手动触发，并会先暂停 Nav2，验证成功后再恢复。
+- 新增 `localization_bringup` 生命周期门控。只有 `/localization_ready=true` 且
+  `map -> base_link` TF 有效时才启动 Nav2；手动重定位期间暂停，失败不恢复。
+- 新增 `cartographer_2d_localization.lua`：保留当前 V9 激光、轮式里程计、IMU 和回环参数，
+  仅增加纯定位子图裁剪，因此启动定位完成后仍由下位机里程计和 Cartographer 闭环连续定位。
+- 新增独立 `reloc_rviz_panel` C++ 插件与 `dual_resolution_3d_localization.rviz`；普通建图和
+  普通导航 RViz 配置未加入手动重定位按钮。
+
+## 2026-08-06 Humble Nav2 三级脱困等价移植
+
+- 单点导航和多点导航行为树外层统一增加三级渐进恢复，普通导航与重定位导航共用该逻辑。
+- 一级恢复只清理局部、全局代价地图并短暂等待，然后由主树重新规划，不产生盲目运动。
+- 二级恢复使用 Nav2 `BackUp` 做 footprint 碰撞预测；单点导航同时使用
+  `ReverseEscapeMonitor` 检查 `/cmd_vel_nav` 与 `odom`，确认底盘真实倒退后才算成功。
+- 三级恢复必须先通过 `SpinSafetyCheck` 的完整车体扫掠圆检查，随后执行受控 60 度方向搜索、
+  清理代价地图并重新规划。
+- 没有启动 `all.beifen` 的 `three_level_recovery_nav.py`。该节点直接发布 `/cmd_vel`，并包含
+  按时间盲倒、强制旋转和临时禁区发布，会绕过当前 Nav2、PS2 与安全仲裁的唯一控制权链路。
+- 没有照搬强制 360 度旋转；本车历史测试表明原地整圈会增加轮胎打滑和 Cartographer 偏航风险。
+  三级恢复改为受碰撞检查的 60 度搜索，连续恢复仍可由行为树轮换尝试，但不会一次强制整圈。
+# 2026-08-06 UI 独立接入与三级脱困状态
+
+- 所有一键脚本增加 `DUAL_3D_STACK_MODE`，运行器把 PID、模式、工程目录和日志目录原子写入 `~/.cache/huichuan_agv/`，供独立 UI 自动发现和安全停止。
+- 新增行为树节点 `RecoveryStatus`，在 `/navigation/recovery_status` 发布 `tracking`、`level1`、`level2`、`level3` 以及真实失败原因。
+- Humble 单点和多点行为树均接入三级脱困状态，原有导航、代价地图和碰撞安全链路不被 UI 替换。
+- UI 不直接打开 STM32 串口；归还手柄必须通过 `/robot/web_control` 交给 `chassis_node`。
+- UI 地图切换使用 `Loc_MAP` 中同名的 PGM、YAML、PBStream，并启动 `START_DUAL_2D_3D_LOCALIZATION.sh`。

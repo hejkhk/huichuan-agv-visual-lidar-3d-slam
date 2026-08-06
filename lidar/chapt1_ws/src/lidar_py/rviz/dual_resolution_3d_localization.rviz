@@ -5,6 +5,8 @@ Panels:
     Name: Views
   - Class: nav2_rviz_plugins/Navigation 2
     Name: Navigation 2
+  - Class: reloc_rviz_panel/RelocPanel
+    Name: Verified Relocalization
 Visualization Manager:
   Class: ""
   Displays:

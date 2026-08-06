@@ -12,6 +12,7 @@ find_package(nav2_behavior_tree REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -20,6 +21,7 @@ add_library(short_goal_behind_bt_node SHARED
   src/short_goal_behind_condition.cpp
   src/initial_path_pre_rotate_condition.cpp
   src/reverse_escape_monitor.cpp
+  src/recovery_status_action.cpp
   src/spin_safety_condition.cpp)
 target_compile_definitions(short_goal_behind_bt_node PRIVATE BT_PLUGIN_EXPORT)
 target_compile_features(short_goal_behind_bt_node PUBLIC cxx_std_17)
@@ -33,6 +35,7 @@ ament_target_dependencies(short_goal_behind_bt_node
   nav_msgs
   nav2_msgs
   rclcpp
+  std_msgs
   tf2
   tf2_geometry_msgs
   tf2_ros)

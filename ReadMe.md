@@ -1337,3 +1337,37 @@ SmacPlanner2D 全局规划
 `short_goal_bt` 已按 Humble 的 `behaviortree_cpp_v3` 编译并由 `bt_navigator` 动态加载；
 禁止再放置 `COLCON_IGNORE`。Python 版 `three_level_recovery_nav.py` 不进入正式链路，避免直接
 发布 `/cmd_vel` 与 Nav2、安全仲裁争夺控制权。
+
+## 10. 已有地图重定位导航
+
+将同一次建图保存出的文件放进根目录 `Loc_MAP/`：
+
+```text
+Loc_MAP/map.yaml
+Loc_MAP/map.pgm
+Loc_MAP/map.pbstream
+```
+
+安装一次匹配器依赖并启动：
+
+```bash
+sudo apt install python3-scipy
+./START_DUAL_2D_3D_LOCALIZATION.sh
+```
+
+使用其他文件名时保持三份文件基名一致，例如 `floor_1.*`，然后执行：
+
+```bash
+./START_DUAL_2D_3D_LOCALIZATION.sh floor_1
+```
+
+启动后保持车辆静止。系统先加载 YAML/PGM 作为 Nav2 静态规划地图，再加载同会话的
+PBSTREAM 作为 Cartographer 冻结地图，使用当前 2D 雷达进行全局扫描匹配。只有匹配得分和
+唯一性检查通过后才激活 Nav2 并解除主机运动锁；失败时车辆保持不动，RViz 面板会显示原因。
+
+`Verified Relocalization` 面板只存在于这个启动版本。运行中需要重新定位时，先停车再点
+`Relocalize`；Nav2 会暂停，成功后恢复。系统不会在正常行驶中自行触发重定位或重启轨迹。
+
+定位完成后，冻结 PBSTREAM 提供历史地图约束，新活动轨迹继续融合 `/odom`、
+`/imu_cartographer` 和 2D 雷达，并保留当前 Cartographer 回环优化。现有 Gemini2 实时点云、
+STVL、长期视觉墙、最终碰撞门和底盘安全链路均继续运行。

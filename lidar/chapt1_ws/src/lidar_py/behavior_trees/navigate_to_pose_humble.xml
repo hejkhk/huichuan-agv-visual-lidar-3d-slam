@@ -1,7 +1,9 @@
 <!-- BehaviorTree.CPP 3 / Nav2 Humble real-vehicle navigation tree. -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <PipelineSequence name="NavigateWithSafeControllerSelection">
+    <RecoveryNode number_of_retries="3" name="NavigateWithThreeLevelRecovery">
+      <PipelineSequence name="NavigateWithSafeControllerSelection">
+      <RecoveryStatus stage="tracking" reason=""/>
       <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
       <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
 
@@ -89,6 +91,57 @@
           </RoundRobin>
         </Sequence>
       </RecoveryNode>
-    </PipelineSequence>
+      </PipelineSequence>
+
+      <!-- Progressive recovery remains inside Nav2 so every motion is checked
+           against the local costmap and passes through the safety arbiter. -->
+      <ReactiveFallback name="CancelOrThreeLevelRecovery">
+        <GoalUpdated/>
+        <RoundRobin name="ThreeLevelRecoveryActions">
+          <Sequence name="Level1ClearAndRetry">
+            <RecoveryStatus stage="level1" reason="costmap_or_path_blocked"/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Level1" service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Level1" service_name="global_costmap/clear_entirely_global_costmap"/>
+            <Wait wait_duration="0.5"/>
+          </Sequence>
+
+          <Sequence name="Level2VerifiedBackOut">
+            <RecoveryStatus stage="level2" reason="no_progress_backing_out"/>
+            <Timeout msec="8000">
+              <Parallel success_threshold="2" failure_threshold="1">
+                <BackUp name="RecoveryBackUp" backup_dist="0.24" backup_speed="0.05"/>
+                <ReverseEscapeMonitor cmd_vel_topic="/cmd_vel_nav"
+                                      reverse_velocity_threshold="0.01"
+                                      stopped_velocity_threshold="0.005"
+                                      min_reverse_duration="0.40"
+                                      min_reverse_distance="0.12"
+                                      nonreverse_hold_time="0.20"
+                                      reverse_start_window="1.5"
+                                      fixed_frame="odom"
+                                      robot_base_frame="base_link"
+                                      completed="{reverse_escape_completed}"/>
+              </Parallel>
+            </Timeout>
+            <ClearEntireCostmap name="ClearLocalCostmap-Level2" service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Level2" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+
+          <Sequence name="Level3CollisionCheckedDirectionSearch">
+            <RecoveryStatus stage="level3" reason="dead_end_direction_search"/>
+            <SpinSafetyCheck safety_radius="0.51"
+                             lethal_cost="254"
+                             block_unknown="true"
+                             robot_base_frame="base_link"
+                             costmap_wait_timeout="1.0"/>
+            <!-- A bounded 60 degree search avoids the map damage seen during
+                 forced 360 degree spins while still exposing a new route. -->
+            <Spin name="DirectionSearchTurn" spin_dist="1.0471975512"/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Level3" service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Level3" service_name="global_costmap/clear_entirely_global_costmap"/>
+            <Wait wait_duration="1.0"/>
+          </Sequence>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
   </BehaviorTree>
 </root>

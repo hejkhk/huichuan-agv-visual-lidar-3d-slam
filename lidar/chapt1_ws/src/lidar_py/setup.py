@@ -13,6 +13,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'),
          [os.path.join('launch', 'cartographer_scan_v2_launch.py'),
+          os.path.join('launch', 'cartographer_scan_v2_localization_launch.py'),
           os.path.join('launch', 'cartographer_auto_mapping_jazzy_launch.py'),
           os.path.join('launch', 'cartographer_auto_mapping_humble_launch.py'),
           os.path.join('launch', 'gemini2_rgbd_640.launch.py'),
@@ -36,12 +37,14 @@ setup(
           os.path.join('rviz', 'visual_odom_sync_test.rviz'),
           os.path.join('rviz', 'visual_odom_sync_lite.rviz'),
           os.path.join('rviz', 'dual_resolution_3d_slam.rviz'),
+          os.path.join('rviz', 'dual_resolution_3d_localization.rviz'),
           os.path.join('rviz', 'visual_odom_clean_test.rviz')]),
 
         (os.path.join('share', package_name, 'config'),
          [os.path.join('config', 'laser_filter.yaml'),
           os.path.join('config', 'cartographer_2d_v9_tightened.lua'),
           os.path.join('config', 'cartographer_2d_v9_nav_guarded.lua'),
+          os.path.join('config', 'cartographer_2d_localization.lua'),
           os.path.join('config', 'frontier_auto_mapping_jazzy.yaml'),
           os.path.join('config', 'frontier_auto_mapping_humble.yaml'),
           os.path.join('config', 'nav2_auto_mapping_jazzy.yaml'),
@@ -92,6 +95,8 @@ setup(
             'rtabmap_loop_monitor = lidar_py.rtabmap_loop_monitor:main',
             'camera_ground_calibrator = lidar_py.camera_ground_calibrator:main',
             'camera_lidar_yaw_calibrator = lidar_py.camera_lidar_yaw_calibrator:main',
+            'cartographer_reloc = lidar_py.cartographer_reloc:main',
+            'localization_bringup = lidar_py.localization_bringup:main',
         ],
 
 
