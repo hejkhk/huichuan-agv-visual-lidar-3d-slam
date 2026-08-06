@@ -115,7 +115,7 @@ orbbec_video_nodes() {
 }
 
 camera_ownership_report() {
-  local nodes="" node="" holders=""
+  local nodes="" node="" holders="" entry=""
   nodes="$(orbbec_video_nodes)"
   if [ -z "$nodes" ]; then
     log "[camera] No Orbbec /dev/video* interface was found (USB/udev/cable check required)."
@@ -133,13 +133,44 @@ camera_ownership_report() {
     done <<<"$nodes"
   fi
   if command -v pgrep >/dev/null 2>&1; then
-    holders="$(pgrep -af 'orbbec_camera_node|camera_container|OrbbecViewer|OrbbecSDK|obsensor|cheese|guvcview' 2>/dev/null || true)"
-    [ -z "$holders" ] || log "[camera] Candidate camera processes:\n$holders"
+    holders="$(pgrep -af \
+      '[/]rclcpp_components/component_container(_mt)?.*__node:=camera_container|[/]orbbec_camera_node( |$)|[/](OrbbecViewer|OrbbecSDKViewer|cheese|guvcview)( |$)' \
+      2>/dev/null || true)"
+    if [ -n "$holders" ]; then
+      log "[camera] Candidate camera processes:"
+      while IFS= read -r entry; do
+        [ -z "$entry" ] || log "[camera]   $entry"
+      done <<<"$holders"
+    fi
   fi
+}
+
+stop_stale_project_camera_container() {
+  local pids="" pid="" cmdline=""
+  command -v pgrep >/dev/null 2>&1 || return 0
+  pids="$(pgrep -f \
+    '[/]rclcpp_components/component_container(_mt)?.*__node:=camera_container.*__ns:=/camera' \
+    2>/dev/null || true)"
+  [ -n "$pids" ] || return 0
+
+  for pid in $pids; do
+    cmdline="$(process_cmdline "$pid" 2>/dev/null || true)"
+    log "[camera] Stopping stale project camera container pid=$pid: $cmdline"
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  for pid in $pids; do
+    if ! wait_process_exit "$pid" 50; then
+      log "[camera] Stale camera container pid=$pid ignored TERM; sending KILL."
+      kill -KILL "$pid" 2>/dev/null || true
+      wait_process_exit "$pid" 20 || \
+        die "Stale camera container could not be stopped (pid=$pid)"
+    fi
+  done
 }
 
 prepare_camera_ownership() {
   local holders="" camera_processes=""
+  stop_stale_project_camera_container
   if command -v fuser >/dev/null 2>&1; then
     while IFS= read -r node; do
       [ -n "$node" ] || continue
@@ -154,7 +185,7 @@ prepare_camera_ownership() {
 
   if command -v pgrep >/dev/null 2>&1; then
     camera_processes="$(pgrep -af \
-      '[o]rbbec_camera_node|[c]amera_container|[O]rbbecViewer|[O]rbbecSDK|[o]bsensor|[c]heese|[g]uvcview' \
+      '[/]rclcpp_components/component_container(_mt)?.*__node:=camera_container|[/]orbbec_camera_node( |$)|[/](OrbbecViewer|OrbbecSDKViewer|cheese|guvcview)( |$)' \
       2>/dev/null || true)"
   fi
   if [ -n "$camera_processes" ]; then
