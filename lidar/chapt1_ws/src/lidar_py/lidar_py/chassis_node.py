@@ -999,13 +999,14 @@ class ChassisNode(Node):
         return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
 
     def _update_navi_yaw(self, yaw_rad: float, dt=None, gyro_z_rad_s=0.0):
-        """Fuse short-term gyro prediction with gated absolute yaw.
+        """Gate impossible absolute-yaw samples without contaminating odometry.
 
         The lower controller can occasionally emit impossible absolute-yaw
-        steps and then drift slowly back. Rebasing on the bad sample lets that
-        slow recovery leak into odometry. Instead, advance a virtual absolute
-        reference with the measured gyro while the absolute measurement is
-        outside the innovation/rate gate.
+        steps together with an invalid angular rate. Rebasing on the bad sample
+        or integrating its gyro lets the corruption leak into odometry. Hold
+        the accepted heading until the absolute measurement becomes coherent
+        again; losing one valid 20 ms increment is safer than rotating the
+        complete Cartographer trajectory.
         """
         yaw_rad = self._wrap_pi(yaw_rad)
         if self.navi_unwrapped_yaw_rad is None:
@@ -1024,19 +1025,19 @@ class ChassisNode(Node):
         limited = False
         if dt is not None and 0.0 < dt <= 0.5:
             max_delta = self.navi_max_yaw_rate_rad_s * dt
-            predicted_delta = max(
-                -max_delta,
-                min(max_delta, float(gyro_z_rad_s) * dt),
-            )
+            gyro_delta = float(gyro_z_rad_s) * dt
+            predicted_delta = max(-max_delta, min(max_delta, gyro_delta))
             innovation = self._wrap_pi(raw_delta - predicted_delta)
             innovation_gate = max(math.radians(2.0), 0.75 * max_delta)
             if (abs(raw_delta) > max_delta
                     or abs(innovation) > innovation_gate):
-                accepted_delta = predicted_delta
+                accepted_delta = 0.0
                 limited = True
                 self.navi_yaw_limited_count += 1
-                self.navi_last_raw_yaw_rad = self._wrap_pi(
-                    self.navi_last_raw_yaw_rad + predicted_delta)
+                # Do not advance the virtual absolute reference with gyro data
+                # from a frame whose absolute heading is already impossible.
+                # The 2026-08-06 failure contained valid checksums but paired
+                # 40-170 degree yaw steps with angular rates up to 1992 deg/s.
             else:
                 self.navi_last_raw_yaw_rad = yaw_rad
         elif dt is not None:
@@ -1067,7 +1068,7 @@ class ChassisNode(Node):
             f"accepted_step={math.degrees(accepted_delta):+.2f}deg "
             f"dt={dt * 1000.0:.1f}ms "
             f"limit={math.degrees(self.navi_max_yaw_rate_rad_s):.1f}deg/s "
-            "action=reject_absolute_use_gyro_prediction "
+            "action=reject_heading_and_gyro_hold_last "
             f"count={self.navi_yaw_limited_count} "
             f"raw=[yaw={yaw_raw},vx={vx_raw},vz={vz_raw},tick={tick_raw}] "
             f"checksum=0x{received_checksum:02X}/calc=0x{checksum:02X} "

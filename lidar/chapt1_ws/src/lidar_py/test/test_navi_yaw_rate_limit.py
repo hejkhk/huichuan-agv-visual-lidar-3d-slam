@@ -38,15 +38,35 @@ def test_large_yaw_step_is_rejected_without_rebasing_to_corrupt_sample():
     assert math.isclose(math.degrees(accepted), 0.0, abs_tol=1e-6)
 
 
-def test_bad_absolute_yaw_uses_gyro_prediction_during_real_turn():
+def test_bad_absolute_yaw_cannot_import_gyro_from_same_corrupt_frame():
     state = make_filter(0.0)
 
     accepted, _, accepted_delta, limited = update(
-        state, 40.0, gyro_deg_s=30.0)
+        state, 40.0, gyro_deg_s=-1992.18)
 
     assert limited
-    assert math.isclose(math.degrees(accepted_delta), 0.6, abs_tol=1e-6)
-    assert math.isclose(math.degrees(accepted), 0.6, abs_tol=1e-6)
+    assert accepted_delta == 0.0
+    assert math.isclose(math.degrees(accepted), 0.0, abs_tol=1e-6)
+
+
+def test_repeated_corrupt_yaw_and_gyro_frames_cannot_accumulate_rotation():
+    state = make_filter(85.73)
+
+    samples = (
+        (65.64, -1992.18),
+        (45.56, 0.0),
+        (5.24, 0.0),
+        (-34.91, 0.0),
+        (-162.58, 0.0),
+        (152.93, -1992.18),
+    )
+    for target_deg, gyro_deg_s in samples:
+        accepted, _, accepted_delta, limited = update(
+            state, target_deg, gyro_deg_s=gyro_deg_s)
+        assert limited
+        assert accepted_delta == 0.0
+        assert math.isclose(
+            math.degrees(accepted), 85.73, abs_tol=1e-6)
 
 
 def test_slow_return_from_corrupt_offset_cannot_leak_into_heading():
