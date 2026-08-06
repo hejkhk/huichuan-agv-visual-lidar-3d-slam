@@ -252,9 +252,14 @@ if "DeleteTrajectory" in reloc or "/delete_trajectory" in reloc:
     raise SystemExit("Humble relocalizer still references unavailable DeleteTrajectory")
 if "qos_profile_sensor_data" not in reloc:
     raise SystemExit("Humble relocalizer must subscribe to LiDAR with sensor-data QoS")
+for service in ('"/get_trajectory_states"', '"/finish_trajectory"', '"/start_trajectory"'):
+    if service not in reloc:
+        raise SystemExit(f"Humble relocalizer uses the wrong Cartographer service path: {service}")
 runner = (root.parents[3] / "visual_laser_slam" / "run_dual_resolution_3d_slam.sh").read_text(encoding="utf-8")
 if "wait_boolean_true /localization_ready 150" not in runner:
     raise SystemExit("localization launcher must wait for the verified localization gate")
+if 'while [ "$SECONDS" -lt "$deadline" ]' not in runner:
+    raise SystemExit("boolean readiness gate must keep sampling after its initial false value")
 if "wait_topic /cartographer_pose_odom 30" not in runner:
     raise SystemExit("mapping launcher must still verify Cartographer corrected pose")
 PY

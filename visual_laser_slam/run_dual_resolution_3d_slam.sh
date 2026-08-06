@@ -310,11 +310,22 @@ wait_topic() {
 
 wait_boolean_true() {
   local topic="$1" timeout_sec="${2:-120}" output=""
-  output="$(timeout --signal=TERM --kill-after=2s "${timeout_sec}s" \
-    ros2 topic echo "$topic" --once \
-      --qos-reliability reliable \
-      --qos-durability transient_local 2>/dev/null || true)"
-  printf '%s\n' "$output" | grep -Eiq 'data:[[:space:]]*true'
+  local deadline=$((SECONDS + timeout_sec))
+  # /localization_ready is latched false at startup. Reading only one sample
+  # returns that valid false immediately, so keep sampling until verification
+  # publishes true or the actual deadline expires.
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    output="$(timeout --signal=TERM --kill-after=1s 3s \
+      ros2 topic echo "$topic" --once \
+        --qos-reliability reliable \
+        --qos-durability transient_local 2>/dev/null || true)"
+    if printf '%s\n' "$output" | grep -Eiq 'data:[[:space:]]*true'; then
+      return 0
+    fi
+    kill -0 "$LAUNCH_PID" 2>/dev/null || return 1
+    sleep 1
+  done
+  return 1
 }
 
 wait_transient_topic() {

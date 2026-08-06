@@ -120,11 +120,11 @@ class CartographerRelocalizer(Node):
 
         self.states_client = self.create_client(
             GetTrajectoryStates,
-            "/cartographer_node/get_trajectory_states")
+            "/get_trajectory_states")
         self.finish_client = self.create_client(
-            FinishTrajectory, "/cartographer_node/finish_trajectory")
+            FinishTrajectory, "/finish_trajectory")
         self.start_client = self.create_client(
-            StartTrajectory, "/cartographer_node/start_trajectory")
+            StartTrajectory, "/start_trajectory")
 
         self.map_msg = None
         self.map_data = None
@@ -222,7 +222,11 @@ class CartographerRelocalizer(Node):
                 and self.finish_client.service_is_ready()
                 and self.start_client.service_is_ready()):
             self.state = "waiting_cartographer"
-            self.detail = "trajectory services"
+            self.detail = (
+                "trajectory services "
+                f"states={self.states_client.service_is_ready()} "
+                f"finish={self.finish_client.service_is_ready()} "
+                f"start={self.start_client.service_is_ready()}")
             return
         self._start_search()
 

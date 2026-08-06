@@ -4,7 +4,6 @@
 import rclpy
 from nav2_msgs.srv import ClearEntireCostmap, ManageLifecycleNodes
 from rclpy.executors import ExternalShutdownException
-from rclpy.exceptions import RCLError
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
@@ -125,8 +124,14 @@ def main(args=None):
     node = LocalizationBringup()
     try:
         rclpy.spin(node)
-    except (KeyboardInterrupt, ExternalShutdownException, RCLError):
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except Exception:
+        # Humble exposes shutdown wait-set failures only through its private
+        # pybind module, not rclpy.exceptions. Suppress them strictly after the
+        # shared ROS context has already been shut down.
+        if rclpy.ok():
+            raise
     finally:
         node.destroy_node()
         if rclpy.ok():
