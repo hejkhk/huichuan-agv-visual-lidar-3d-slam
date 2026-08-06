@@ -293,6 +293,12 @@ if [ "${1:-}" = "--build" ]; then
     BUILD_SELECTION+=(
       --packages-ignore orbbec_camera orbbec_camera_msgs orbbec_description
     )
+  elif [ "${CAR_VALIDATION_BUILD_VENDOR:-0}" = "1" ]; then
+    # Keep the camera wrapper explicit. This prevents a package.xml change
+    # from silently turning the full ARM64 build into a project-only build.
+    BUILD_SELECTION=(
+      --packages-up-to lidar_py reloc_rviz_panel orbbec_camera
+    )
   fi
   mkdir -p "$BUILD_ROOT"
   if [ -L "$BUILD_ROOT/src" ]; then
@@ -313,6 +319,11 @@ if [ "${1:-}" = "--build" ]; then
   # pluginlib consumers. YAML parsing alone cannot detect an invalid class ID.
   # shellcheck disable=SC1091
   source "$BUILD_ROOT/install/setup.bash"
+  if [ "${CAR_VALIDATION_BUILD_VENDOR:-0}" = "1" ]; then
+    ros2 pkg prefix orbbec_camera >/dev/null 2>&1 ||
+      fail "Full ARM64 build did not install orbbec_camera"
+    pass "Bundled Orbbec ARM64 wrapper build"
+  fi
   MERGED_PARAMS="$BUILD_ROOT/humble_nav2_smoke.yaml"
   "$SYSTEM_PYTHON" -I - \
     "$LIDAR_SRC/config/nav2_auto_mapping_humble.yaml" \

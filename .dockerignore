@@ -1,0 +1,17 @@
+.git
+.github
+**/build
+**/install
+**/log
+**/__pycache__
+**/*.pyc
+SLAM_Log
+Log
+maps
+maps_3d
+*.db
+*.db-shm
+*.db-wal
+*.pbstream
+web/node_modules
+SLAM_Log.zip
