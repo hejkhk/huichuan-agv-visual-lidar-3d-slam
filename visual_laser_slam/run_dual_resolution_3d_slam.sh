@@ -480,6 +480,15 @@ wait_boolean_true() {
   # returns that valid false immediately, so keep sampling until verification
   # publishes true or the actual deadline expires.
   while [ "$SECONDS" -lt "$deadline" ]; do
+    # The relocalizer's in-process confirmation is emitted immediately before
+    # publishing the latched true sample. On a loaded Jetson, starting another
+    # ros2cli DDS participant can take tens of seconds even though localization
+    # has already succeeded, so consume this equivalent evidence first.
+    if [ "$topic" = "/localization_ready" ] && \
+        grep -Eq 'Localization verified; Nav2 may start' "$RUNTIME_LOG"; then
+      log "[ready] data $topic (confirmed by startup relocalizer)"
+      return 0
+    fi
     output="$(timeout --signal=TERM --kill-after=1s 3s \
       ros2 topic echo "$topic" --once \
         --qos-reliability reliable \
@@ -489,6 +498,20 @@ wait_boolean_true() {
     fi
     kill -0 "$LAUNCH_PID" 2>/dev/null || return 1
     sleep 1
+  done
+  return 1
+}
+
+wait_runtime_evidence() {
+  local pattern="$1" label="$2" timeout_sec="${3:-30}"
+  local deadline=$((SECONDS + timeout_sec))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if grep -Eq "$pattern" "$RUNTIME_LOG"; then
+      log "[ready] $label (confirmed in-process)"
+      return 0
+    fi
+    kill -0 "$LAUNCH_PID" 2>/dev/null || return 1
+    sleep 0.25
   done
   return 1
 }
@@ -532,6 +555,12 @@ wait_lifecycle_active() {
   local node="$1" timeout_sec="${2:-45}" state=""
   local deadline=$((SECONDS + timeout_sec))
   while [ "$SECONDS" -lt "$deadline" ]; do
+    if [ "$node" = "/controller_server" ] && \
+        grep -Eq 'lifecycle_manager_navigation.*Managed nodes are active' \
+          "$RUNTIME_LOG"; then
+      log "[ready] lifecycle $node = active (confirmed by lifecycle manager)"
+      return 0
+    fi
     state="$(timeout --signal=TERM --kill-after=1s 5s \
       ros2 lifecycle get "$node" 2>&1 || true)"
     if printf '%s\n' "$state" | \
@@ -1351,15 +1380,15 @@ else
 fi
 
 log "[startup] Verifying Gemini2 and the live collision cloud..."
-if ! wait_topic /camera/color/image_raw 60; then
+if ! wait_runtime_evidence \
+    'RGB-D sync .*color/depth [1-9][0-9.]*[/][1-9][0-9.]* Hz' \
+    'Gemini2 RGB and depth streams' 30; then
   camera_ownership_report
-  die "Gemini2 RGB stream did not start"
+  die "Gemini2 RGB-D streams did not start"
 fi
-if ! wait_topic /camera/depth/image_raw 30; then
-  camera_ownership_report
-  die "Gemini2 depth stream did not start"
-fi
-wait_topic "${LOCAL_CLOUD_TOPIC:-/local_highres_cloud_v21}" 45 || \
+wait_runtime_evidence \
+  'STEP10V2\.1 [1-9][0-9]*x[1-9][0-9]* -> [1-9][0-9]* live' \
+  'STEP10V2.1 local cloud data' 30 || \
   die "STEP10V2.1 local cloud did not start"
 if is_true "$ENABLE_VISUAL_FUSION"; then
   wait_topic /visual_odom 60 || die "RGB-D visual odometry did not start"
@@ -1368,9 +1397,12 @@ fi
 
 if is_true "$ENABLE_NAVIGATION"; then
   log "[startup] Verifying the live collision input before activating Nav2..."
-  wait_topic "${LOCAL_SENSOR_CLOUD_TOPIC:-/local_highres_cloud_v21/sensor}" 30 || \
+  wait_topic_publisher \
+    "${LOCAL_SENSOR_CLOUD_TOPIC:-/local_highres_cloud_v21/sensor}" 15 || \
     die "Recent geometry-filtered navigation cloud did not start"
-  wait_topic /local_cloud_collision_stop 30 || \
+  wait_runtime_evidence \
+    'COLLISION_GATE .*cloud_age=[0-9][0-9.]*ms .*scan_alive=true' \
+    'C++ collision gate with fresh cloud and scan' 15 || \
     die "C++ local collision gate did not start"
   if is_true "$LOCALIZATION_MODE"; then
     log "[localization] Waiting for a verified scan-to-map match..."

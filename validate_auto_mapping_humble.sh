@@ -266,6 +266,20 @@ if "Automatic match is still unverified" not in runner:
     raise SystemExit("localization failure must preserve RViz manual recovery")
 if 'while [ "$SECONDS" -lt "$deadline" ]' not in runner:
     raise SystemExit("boolean readiness gate must keep sampling after its initial false value")
+for evidence in (
+        "confirmed by startup relocalizer",
+        "Gemini2 RGB and depth streams",
+        "STEP10V2.1 local cloud data",
+        "C++ collision gate with fresh cloud and scan"):
+    if evidence not in runner:
+        raise SystemExit(
+            f"Jetson startup is missing fast in-process readiness evidence: {evidence}")
+if "wait_topic /camera/color/image_raw 60" in runner:
+    raise SystemExit(
+        "launcher must not deserialize full RGB frames with ros2cli before releasing motion")
+if "wait_topic /camera/depth/image_raw 30" in runner:
+    raise SystemExit(
+        "launcher must not deserialize full depth frames with ros2cli before releasing motion")
 if "strong_match_score" not in reloc or "strong_match_min_margin" not in reloc:
     raise SystemExit("startup relocalizer is missing the guarded strong-match gate")
 if "retry_wait" not in reloc or "max_auto_attempts" not in reloc:
