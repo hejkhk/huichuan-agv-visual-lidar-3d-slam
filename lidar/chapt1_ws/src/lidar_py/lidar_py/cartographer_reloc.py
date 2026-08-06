@@ -22,7 +22,12 @@ from geometry_msgs.msg import Pose
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, String
 from tf2_ros import Buffer, TransformListener
@@ -96,8 +101,15 @@ class CartographerRelocalizer(Node):
 
         self.create_subscription(
             OccupancyGrid, self.map_topic, self._on_map, map_qos)
+        # LiDAR and laser_filters publish sensor streams as BEST_EFFORT.  A
+        # default RELIABLE subscription silently receives zero messages from
+        # that stream in ROS 2, which leaves localization waiting forever.
         self.create_subscription(
-            LaserScan, self.scan_topic, self._on_scan, 10)
+            LaserScan,
+            self.scan_topic,
+            self._on_scan,
+            qos_profile_sensor_data,
+        )
         self.create_subscription(Odometry, self.odom_topic, self._on_odom, 20)
         self.create_subscription(
             Bool, "/cartographer_reloc/trigger", self._on_manual_trigger, 1)
@@ -133,6 +145,7 @@ class CartographerRelocalizer(Node):
         self.expected_pose = None
         self.active_trajectory_id = None
         self.reference_trajectory_id = None
+        self._last_logged_state = None
 
         self._publish_ready(False)
         self.create_timer(0.25, self._tick)
@@ -535,6 +548,10 @@ class CartographerRelocalizer(Node):
             f"{self.state}|score={self.best_score:.3f}|"
             f"second={self.second_score:.3f}|{self.detail}")
         self.state_pub.publish(msg)
+        if self.state != self._last_logged_state:
+            self.get_logger().info(
+                f"Relocalization state={self.state}: {self.detail}")
+            self._last_logged_state = self.state
 
     @staticmethod
     def _pose(x, y, yaw):

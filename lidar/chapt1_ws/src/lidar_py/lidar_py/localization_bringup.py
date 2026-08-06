@@ -4,6 +4,7 @@
 import rclpy
 from nav2_msgs.srv import ClearEntireCostmap, ManageLifecycleNodes
 from rclpy.executors import ExternalShutdownException
+from rclpy.exceptions import RCLError
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
@@ -124,7 +125,7 @@ def main(args=None):
     node = LocalizationBringup()
     try:
         rclpy.spin(node)
-    except (KeyboardInterrupt, ExternalShutdownException):
+    except (KeyboardInterrupt, ExternalShutdownException, RCLError):
         pass
     finally:
         node.destroy_node()

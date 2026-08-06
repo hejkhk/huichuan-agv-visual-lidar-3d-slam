@@ -250,6 +250,13 @@ if "-start_trajectory_with_default_topics=false" not in localization_launch:
 reloc = (root / "lidar_py" / "cartographer_reloc.py").read_text(encoding="utf-8")
 if "DeleteTrajectory" in reloc or "/delete_trajectory" in reloc:
     raise SystemExit("Humble relocalizer still references unavailable DeleteTrajectory")
+if "qos_profile_sensor_data" not in reloc:
+    raise SystemExit("Humble relocalizer must subscribe to LiDAR with sensor-data QoS")
+runner = (root.parents[3] / "visual_laser_slam" / "run_dual_resolution_3d_slam.sh").read_text(encoding="utf-8")
+if "wait_boolean_true /localization_ready 150" not in runner:
+    raise SystemExit("localization launcher must wait for the verified localization gate")
+if "wait_topic /cartographer_pose_odom 30" not in runner:
+    raise SystemExit("mapping launcher must still verify Cartographer corrected pose")
 PY
 pass "Humble YAML, plugin and BT.CPP 3 contracts"
 

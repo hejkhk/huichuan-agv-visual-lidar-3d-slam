@@ -1151,12 +1151,18 @@ log "[startup] Verifying the motion-feedback and Cartographer safety chain..."
 wait_topic /odom 20 || die "STM32 odometry /odom did not start"
 wait_topic /imu_cartographer 20 || \
   die "STM32 planar IMU /imu_cartographer did not start"
-wait_topic /cartographer_pose_odom 30 || \
-  die "Cartographer corrected pose did not start"
 if is_true "$LOCALIZATION_MODE"; then
   wait_transient_topic /map 30 || \
     die "Static localization map server did not publish /map"
+  # In localization mode Cartographer deliberately starts with no active
+  # trajectory.  /cartographer_pose_odom is created only after the scan-to-map
+  # relocalizer matches the frozen state, so waiting for it here deadlocks the
+  # very node that must create it.
+  wait_boolean_true /localization_ready 150 || \
+    die "Cartographer startup relocalization did not verify"
 else
+  wait_topic /cartographer_pose_odom 30 || \
+    die "Cartographer corrected pose did not start"
   wait_topic /map 30 || die "Cartographer occupancy map did not start"
 fi
 
