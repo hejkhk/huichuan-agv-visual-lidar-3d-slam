@@ -857,6 +857,16 @@ PY
 
 release_motion_interlock() {
   local response=""
+  # LocalizationBringup is a long-lived DDS participant and releases the gate
+  # only after localization, Nav2 lifecycle and collision-sensor readiness are
+  # all true. Prefer its acknowledgement over a short-lived ros2cli process,
+  # whose discovery can time out under Jetson load even when the service exists.
+  if wait_runtime_evidence \
+      'SYSTEM_READY motion interlock released by topic' \
+      'in-process chassis motion handshake' 12; then
+    log "[ready] Confirmed /robot/system_ready=true"
+    return 0
+  fi
   wait_graph_name service /robot/set_system_ready 15 || {
     log "[ERROR] chassis readiness service /robot/set_system_ready is unavailable"
     return 1

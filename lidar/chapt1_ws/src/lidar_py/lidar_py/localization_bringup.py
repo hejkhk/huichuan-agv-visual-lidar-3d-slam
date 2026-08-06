@@ -31,6 +31,11 @@ class LocalizationBringup(Node):
         qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
         self.create_subscription(
             Bool, "/localization_ready", self._on_ready, qos)
+        self.create_subscription(
+            Bool, "/robot/navigation_sensor_healthy",
+            self._on_sensor_health, 10)
+        self.system_ready_pub = self.create_publisher(
+            Bool, "/robot/system_ready", 10)
         self.state_pub = self.create_publisher(
             String, "/localization_bringup/state", 5)
         self.client = self.create_client(ManageLifecycleNodes, service)
@@ -44,8 +49,10 @@ class LocalizationBringup(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.ready = False
+        self.sensor_healthy = False
         self.started = False
         self.paused = False
+        self.motion_released = False
         self.request_in_flight = False
         self.pending_command = None
         self.last_detail = "waiting for verified localization"
@@ -61,7 +68,28 @@ class LocalizationBringup(Node):
                 ManageLifecycleNodes.Request.RESUME
                 if self.started else ManageLifecycleNodes.Request.STARTUP)
 
+    def _on_sensor_health(self, msg):
+        self.sensor_healthy = bool(msg.data)
+
+    def _publish_motion_gate(self):
+        release = bool(
+            self.ready and self.sensor_healthy and
+            self.started and not self.paused)
+        self.system_ready_pub.publish(Bool(data=release))
+        if release == self.motion_released:
+            return
+        self.motion_released = release
+        if release:
+            self.get_logger().info(
+                "Startup motion gate released in-process: localization, "
+                "Nav2 lifecycle and collision sensors are ready")
+        else:
+            self.get_logger().warn(
+                "Startup motion gate locked: localization, Nav2 lifecycle "
+                "or collision-sensor readiness was lost")
+
     def _tick(self):
+        self._publish_motion_gate()
         if self.request_in_flight:
             return
         if not self.client.service_is_ready():

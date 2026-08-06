@@ -134,6 +134,10 @@ if not bt.get("plugin_lib_names"):
     raise SystemExit("Humble bt_navigator.plugin_lib_names is required")
 if "short_goal_behind_bt_node" not in bt["plugin_lib_names"]:
     raise SystemExit("Humble custom short-goal BT plugin is not loaded")
+if bt.get("bt_loop_duration") != 50:
+    raise SystemExit("Jetson Humble BT loop must remain bounded at 20 Hz")
+if bt.get("default_server_timeout") != 500:
+    raise SystemExit("Jetson Humble BT service timeout must tolerate CPU load")
 
 expected_costmap_plugins = {
     "obstacle_layer": "nav2_costmap_2d::ObstacleLayer",
@@ -173,12 +177,16 @@ if waypoint.get("plugin") != "nav2_waypoint_follower::WaitAtWaypoint":
     raise SystemExit("invalid Humble waypoint executor plugin name")
 
 controller = dwb["controller_server"]["ros__parameters"]
+if controller.get("controller_frequency") != 10.0:
+    raise SystemExit("Jetson Humble DWB loop must remain at the sustainable 10 Hz")
 if controller.get("progress_checker_plugin") != "progress_checker":
     raise SystemExit("Humble requires singular progress_checker_plugin")
 if "progress_checker_plugins" in controller:
     raise SystemExit("Jazzy progress_checker_plugins leaked into Humble")
 if controller["progress_checker"].get("plugin") != "nav2_controller::SimpleProgressChecker":
     raise SystemExit("Humble SimpleProgressChecker is not selected")
+if controller["progress_checker"].get("movement_time_allowance") != 25.0:
+    raise SystemExit("dynamic-obstacle progress allowance changed")
 follow = controller["FollowPath"]
 if follow.get("plugin") != "nav2_rotation_shim_controller::RotationShimController":
     raise SystemExit("invalid Humble RotationShim plugin name")
@@ -259,6 +267,15 @@ if "qos_profile_sensor_data" not in reloc:
 for service in ('"/get_trajectory_states"', '"/finish_trajectory"', '"/start_trajectory"'):
     if service not in reloc:
         raise SystemExit(f"Humble relocalizer uses the wrong Cartographer service path: {service}")
+bringup = (root / "lidar_py" / "localization_bringup.py").read_text(encoding="utf-8")
+for required in (
+        '"/robot/navigation_sensor_healthy"',
+        '"/robot/system_ready"',
+        "self.ready and self.sensor_healthy",
+        "self.started and not self.paused"):
+    if required not in bringup:
+        raise SystemExit(
+            f"localization bringup lost the in-process motion gate: {required}")
 runner = (root.parents[3] / "visual_laser_slam" / "run_dual_resolution_3d_slam.sh").read_text(encoding="utf-8")
 if "while ! wait_boolean_true /localization_ready 150" not in runner:
     raise SystemExit("localization launcher must wait for the verified localization gate")

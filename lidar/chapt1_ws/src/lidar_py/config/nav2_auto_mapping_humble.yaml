@@ -7,8 +7,10 @@ bt_navigator:
     global_frame: map
     robot_base_frame: base_link
     odom_topic: /odom
-    bt_loop_duration: 10
-    default_server_timeout: 20
+    # Nano cannot sustain a 100 Hz BT tick while RTAB-Map and STVL are active.
+    # Service/action acknowledgement also needs headroom beyond one CPU slice.
+    bt_loop_duration: 50
+    default_server_timeout: 500
     wait_for_service_timeout: 1000
     # Humble does not append the built-in BT libraries automatically.
     plugin_lib_names:
