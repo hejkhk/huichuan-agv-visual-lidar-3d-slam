@@ -43,6 +43,140 @@ clear_stack_state() {
   fi
 }
 
+process_cmdline() {
+  local pid="$1"
+  [ -r "/proc/$pid/cmdline" ] || return 1
+  tr '\0' ' ' <"/proc/$pid/cmdline"
+}
+
+wait_process_exit() {
+  local pid="$1" timeout_tenths="${2:-100}"
+  local _
+  for _ in $(seq 1 "$timeout_tenths"); do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+stop_registered_stack() {
+  local old_pid="" old_root="" old_run_dir="" old_launch_pid="" cmdline=""
+  [ -r "$STACK_PID_FILE" ] || return 0
+  old_pid="$(cat "$STACK_PID_FILE" 2>/dev/null || true)"
+  old_root="$(cat "$STACK_ROOT_FILE" 2>/dev/null || true)"
+  old_run_dir="$(cat "$STACK_RUN_DIR_FILE" 2>/dev/null || true)"
+
+  if [[ "$old_pid" =~ ^[0-9]+$ ]] && kill -0 "$old_pid" 2>/dev/null; then
+    cmdline="$(process_cmdline "$old_pid" 2>/dev/null || true)"
+    if [ "$old_root" != "$ROOT_DIR" ] || \
+        [[ "$cmdline" != *run_dual_resolution_3d_slam.sh* ]]; then
+      die "PID state belongs to another live process ($old_pid): ${cmdline:-unknown command}"
+    fi
+    log "[preflight] Stopping the previous project launcher (pid=$old_pid)..."
+    kill -INT "$old_pid" 2>/dev/null || true
+    if ! wait_process_exit "$old_pid" 150; then
+      log "[preflight] Previous launcher did not stop gracefully; sending TERM."
+      kill -TERM "$old_pid" 2>/dev/null || true
+      wait_process_exit "$old_pid" 50 || \
+        die "Previous project launcher is still alive (pid=$old_pid)"
+    fi
+  elif [ -n "$old_run_dir" ] && [ -r "$old_run_dir/ros_launch.pid" ]; then
+    old_launch_pid="$(cat "$old_run_dir/ros_launch.pid" 2>/dev/null || true)"
+    if [[ "$old_launch_pid" =~ ^[0-9]+$ ]] && \
+        kill -0 "$old_launch_pid" 2>/dev/null; then
+      cmdline="$(process_cmdline "$old_launch_pid" 2>/dev/null || true)"
+      if [[ "$cmdline" == *"ros2 launch lidar_py dual_resolution_3d_slam.launch.py"* ]]; then
+        log "[preflight] Removing orphaned ROS launch group (pid=$old_launch_pid)..."
+        kill -INT -- "-$old_launch_pid" 2>/dev/null || \
+          kill -INT "$old_launch_pid" 2>/dev/null || true
+        if ! wait_process_exit "$old_launch_pid" 100; then
+          kill -TERM -- "-$old_launch_pid" 2>/dev/null || true
+          wait_process_exit "$old_launch_pid" 30 || \
+            die "Orphaned ROS launch group is still alive (pid=$old_launch_pid)"
+        fi
+      fi
+    fi
+  fi
+
+  rm -f -- "$STACK_PID_FILE" "$STACK_MODE_FILE" \
+    "$STACK_ROOT_FILE" "$STACK_RUN_DIR_FILE"
+}
+
+orbbec_video_nodes() {
+  local node="" props=""
+  for node in /dev/video*; do
+    [ -e "$node" ] || continue
+    props="$(udevadm info --query=property --name="$node" 2>/dev/null || true)"
+    if printf '%s\n' "$props" | grep -Eiq \
+        'ID_VENDOR_ID=2bc5|ID_VENDOR=.*orbbec|ID_MODEL=.*gemini'; then
+      printf '%s\n' "$node"
+    fi
+  done
+}
+
+camera_ownership_report() {
+  local nodes="" node="" holders=""
+  nodes="$(orbbec_video_nodes)"
+  if [ -z "$nodes" ]; then
+    log "[camera] No Orbbec /dev/video* interface was found (USB/udev/cable check required)."
+  else
+    log "[camera] Orbbec video interfaces: $(printf '%s' "$nodes" | tr '\n' ' ')"
+    while IFS= read -r node; do
+      [ -n "$node" ] || continue
+      holders="$(fuser "$node" 2>/dev/null || true)"
+      if [ -n "$holders" ]; then
+        log "[camera] $node is held by PID(s):$holders"
+        for holder in $holders; do
+          log "[camera]   pid=$holder cmd=$(process_cmdline "$holder" 2>/dev/null || printf unknown)"
+        done
+      fi
+    done <<<"$nodes"
+  fi
+  if command -v pgrep >/dev/null 2>&1; then
+    holders="$(pgrep -af 'orbbec_camera_node|camera_container|OrbbecViewer|OrbbecSDK|obsensor|cheese|guvcview' 2>/dev/null || true)"
+    [ -z "$holders" ] || log "[camera] Candidate camera processes:\n$holders"
+  fi
+}
+
+prepare_camera_ownership() {
+  local holders="" camera_processes=""
+  if command -v fuser >/dev/null 2>&1; then
+    while IFS= read -r node; do
+      [ -n "$node" ] || continue
+      holders="$holders $(fuser "$node" 2>/dev/null || true)"
+    done < <(orbbec_video_nodes)
+  fi
+  holders="$(printf '%s\n' "$holders" | xargs 2>/dev/null || true)"
+  if [ -n "$holders" ]; then
+    camera_ownership_report
+    die "Gemini2 is already in use. Close the listed camera program before starting."
+  fi
+
+  if command -v pgrep >/dev/null 2>&1; then
+    camera_processes="$(pgrep -af \
+      '[o]rbbec_camera_node|[c]amera_container|[O]rbbecViewer|[O]rbbecSDK|[o]bsensor|[c]heese|[g]uvcview' \
+      2>/dev/null || true)"
+  fi
+  if [ -n "$camera_processes" ]; then
+    camera_ownership_report
+    die "A camera process is still running. Stop the listed process before starting."
+  fi
+
+  # The ROS driver creates this POSIX shared-memory mutex. A hard-killed old
+  # process can leave the file behind even though no process owns the camera.
+  if [ -e /dev/shm/orbbec_device_lock ]; then
+    rm -f /dev/shm/orbbec_device_lock 2>/dev/null || true
+    if [ -e /dev/shm/orbbec_device_lock ]; then
+      log "[WARNING] Stale /dev/shm/orbbec_device_lock could not be removed."
+    else
+      log "[camera] Removed stale Orbbec shared-memory lock."
+    fi
+  fi
+  # libuvc may need a short interval after a previous process releases the USB
+  # interface, especially when that process reset the device during shutdown.
+  sleep 1
+}
+
 rviz_supervisor() {
   set +e
   local child="" status=0 restart_count=0
@@ -735,6 +869,7 @@ PY
 auto_detect_ports
 mkdir -p "$RUN_DIR" "$(dirname "$DATABASE_PATH")" "$CACHE_WS"
 : >"$RUNTIME_LOG"
+stop_registered_stack
 printf '%s\n' "$$" >"$RUN_DIR/launcher.pid"
 mkdir -p "$STACK_STATE_DIR"
 printf '%s\n' "$$" >"$STACK_PID_FILE.tmp"
@@ -745,6 +880,10 @@ mv -f "$STACK_PID_FILE.tmp" "$STACK_PID_FILE"
 mv -f "$STACK_MODE_FILE.tmp" "$STACK_MODE_FILE"
 mv -f "$STACK_ROOT_FILE.tmp" "$STACK_ROOT_FILE"
 mv -f "$STACK_RUN_DIR_FILE.tmp" "$STACK_RUN_DIR_FILE"
+
+# Check camera ownership before package checks or incremental compilation, so
+# a busy Gemini2 fails quickly with the process/device details in runtime.log.
+prepare_camera_ownership
 
 [ -f /opt/ros/humble/setup.bash ] || die "ROS 2 Humble was not found at /opt/ros/humble"
 # shellcheck disable=SC1091
@@ -1181,8 +1320,14 @@ else
 fi
 
 log "[startup] Verifying Gemini2 and the live collision cloud..."
-wait_topic /camera/color/image_raw 60 || die "Gemini2 RGB stream did not start"
-wait_topic /camera/depth/image_raw 30 || die "Gemini2 depth stream did not start"
+if ! wait_topic /camera/color/image_raw 60; then
+  camera_ownership_report
+  die "Gemini2 RGB stream did not start"
+fi
+if ! wait_topic /camera/depth/image_raw 30; then
+  camera_ownership_report
+  die "Gemini2 depth stream did not start"
+fi
 wait_topic "${LOCAL_CLOUD_TOPIC:-/local_highres_cloud_v21}" 45 || \
   die "STEP10V2.1 local cloud did not start"
 if is_true "$ENABLE_VISUAL_FUSION"; then
