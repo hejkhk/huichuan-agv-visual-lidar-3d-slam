@@ -4217,7 +4217,7 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
   `map.pbstream`；也可向启动脚本传入其他文件基名。
 - 新增 `START_DUAL_2D_3D_LOCALIZATION.sh`。它复用现有完整 2D/3D、视觉避障、Nav2
   和底盘安全链路，不另建删减版 launch。
-- Cartographer 重定位模式加载冻结 PBSTREAM，同时建立一条新的活动轨迹；静态 PGM/YAML
+- Cartographer 重定位模式先加载冻结 PBSTREAM，匹配成功后才建立新的活动轨迹；静态 PGM/YAML
   由独立 map_server 发布 `/map`，Cartographer 的动态栅格改发
   `/cartographer_localization_map`，避免双发布者覆盖。
 - 从 `all.beifen` 的扫描栅格匹配方法重写 `cartographer_reloc`：自动查询真实活动/冻结轨迹
@@ -4251,3 +4251,14 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
 - Humble 单点和多点行为树均接入三级脱困状态，原有导航、代价地图和碰撞安全链路不被 UI 替换。
 - UI 不直接打开 STM32 串口；归还手柄必须通过 `/robot/web_control` 交给 `chassis_node`。
 - UI 地图切换使用 `Loc_MAP` 中同名的 PGM、YAML、PBStream，并启动 `START_DUAL_2D_3D_LOCALIZATION.sh`。
+
+## 2026-08-06 Humble 重定位地图加载修复
+
+- 启动日志确认 `map.yaml` 仍引用已经不存在的 `final_map_from_bag.pgm`，导致
+  `localization_map_server` configure 失败；启动脚本现在解析 YAML 的 `image` 字段并验证文件，
+  旧地图存在同名 PGM 时生成隐藏的运行时 YAML 自动修复引用，源地图不被覆盖。
+- UI 导入定位地图不再假设图像必然与 YAML 同名；它读取 YAML 的实际图像引用，复制后统一规范为
+  同名 YAML、图像和 PBStream，并原子写入新 YAML。
+- Ubuntu 22.04 / ROS 2 Humble 不提供 `DeleteTrajectory` 服务。重定位节点已移除该 Jazzy 接口，
+  冷启动加载 PBStream 时禁止 Cartographer 自动创建未定位轨迹，匹配成功后通过 Humble
+  `StartTrajectory` 创建正确轨迹；手动重定位仅结束旧活动轨迹后重新创建。

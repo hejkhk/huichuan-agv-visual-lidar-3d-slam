@@ -241,6 +241,15 @@ for required in (
 ):
     if required not in dual:
         raise SystemExit(f"dual-resolution launch does not select {required}")
+
+localization_launch = (
+    root / "launch" / "cartographer_scan_v2_localization_launch.py"
+).read_text(encoding="utf-8")
+if "-start_trajectory_with_default_topics=false" not in localization_launch:
+    raise SystemExit("localization must defer the active trajectory until matching")
+reloc = (root / "lidar_py" / "cartographer_reloc.py").read_text(encoding="utf-8")
+if "DeleteTrajectory" in reloc or "/delete_trajectory" in reloc:
+    raise SystemExit("Humble relocalizer still references unavailable DeleteTrajectory")
 PY
 pass "Humble YAML, plugin and BT.CPP 3 contracts"
 

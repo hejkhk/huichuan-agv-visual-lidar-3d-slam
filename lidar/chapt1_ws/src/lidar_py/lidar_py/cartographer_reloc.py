@@ -14,7 +14,6 @@ import numpy as np
 import rclpy
 from cartographer_ros_msgs.msg import TrajectoryStates
 from cartographer_ros_msgs.srv import (
-    DeleteTrajectory,
     FinishTrajectory,
     GetTrajectoryStates,
     StartTrajectory,
@@ -112,8 +111,6 @@ class CartographerRelocalizer(Node):
             "/cartographer_node/get_trajectory_states")
         self.finish_client = self.create_client(
             FinishTrajectory, "/cartographer_node/finish_trajectory")
-        self.delete_client = self.create_client(
-            DeleteTrajectory, "/cartographer_node/delete_trajectory")
         self.start_client = self.create_client(
             StartTrajectory, "/cartographer_node/start_trajectory")
 
@@ -210,7 +207,6 @@ class CartographerRelocalizer(Node):
             return
         if not (self.states_client.service_is_ready()
                 and self.finish_client.service_is_ready()
-                and self.delete_client.service_is_ready()
                 and self.start_client.service_is_ready()):
             self.state = "waiting_cartographer"
             self.detail = "trajectory services"
@@ -427,12 +423,16 @@ class CartographerRelocalizer(Node):
                       if s == TrajectoryStates.ACTIVE]
             frozen = [i for i, s in zip(ids, states)
                       if s == TrajectoryStates.FROZEN]
-            if len(active) != 1 or not frozen:
+            if len(active) > 1 or not frozen:
                 raise RuntimeError(
-                    f"expected one active and at least one frozen trajectory; "
+                    f"expected at most one active and at least one frozen trajectory; "
                     f"active={active}, frozen={frozen}")
-            self.active_trajectory_id = active[0]
             self.reference_trajectory_id = frozen[0]
+            if not active:
+                self.active_trajectory_id = None
+                self._start_new_trajectory()
+                return
+            self.active_trajectory_id = active[0]
             request = FinishTrajectory.Request()
             request.trajectory_id = self.active_trajectory_id
             next_future = self.finish_client.call_async(request)
@@ -445,18 +445,12 @@ class CartographerRelocalizer(Node):
             response = future.result()
             if response.status.code != 0:
                 raise RuntimeError(response.status.message)
-            request = DeleteTrajectory.Request()
-            request.trajectory_id = self.active_trajectory_id
-            next_future = self.delete_client.call_async(request)
-            next_future.add_done_callback(self._on_deleted)
+            self._start_new_trajectory()
         except Exception as exc:
             self._fail(f"finish trajectory failed: {exc}")
 
-    def _on_deleted(self, future):
+    def _start_new_trajectory(self):
         try:
-            response = future.result()
-            if response.status.code != 0:
-                raise RuntimeError(response.status.message)
             request = StartTrajectory.Request()
             request.configuration_directory = self.config_dir
             request.configuration_basename = self.config_name
@@ -466,7 +460,7 @@ class CartographerRelocalizer(Node):
             next_future = self.start_client.call_async(request)
             next_future.add_done_callback(self._on_started)
         except Exception as exc:
-            self._fail(f"delete temporary trajectory failed: {exc}")
+            self._fail(f"start trajectory request failed: {exc}")
 
     def _on_started(self, future):
         try:
