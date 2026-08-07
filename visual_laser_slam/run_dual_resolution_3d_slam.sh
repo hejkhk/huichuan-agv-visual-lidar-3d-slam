@@ -1290,11 +1290,9 @@ cmd=(ros2 launch lidar_py dual_resolution_3d_slam.launch.py
   "enable_navigation:=$ENABLE_NAVIGATION"
   "nav_autostart:=$NAV_AUTOSTART"
   "localization_mode:=$LOCALIZATION_MODE"
-  "localization_map_yaml:=$LOCALIZATION_MAP_YAML"
   "mutable_map_mark_confirmations:=${MUTABLE_MAP_MARK_CONFIRMATIONS:-3}"
   "mutable_map_clear_confirmations:=${MUTABLE_MAP_CLEAR_CONFIRMATIONS:-20}"
   "mutable_map_evidence_rate:=${MUTABLE_MAP_EVIDENCE_RATE:-5.0}"
-  "cartographer_load_state_filename:=$LOCALIZATION_PBSTREAM"
   "rviz_config_file:=$RVIZ_CONFIG_FILE"
   "cartographer_config:=$CARTOGRAPHER_CONFIG"
   "enable_visual_fusion:=$ENABLE_VISUAL_FUSION"
@@ -1394,6 +1392,15 @@ cmd=(ros2 launch lidar_py dual_resolution_3d_slam.launch.py
   "local_temporal_max_delta_m:=${LOCAL_TEMPORAL_MAX_DELTA_M:-0.06}"
   "local_voxel_outlier_filter:=${LOCAL_VOXEL_OUTLIER_FILTER:-true}"
   "local_voxel_min_neighbors:=${LOCAL_VOXEL_MIN_NEIGHBORS:-1}")
+
+# ROS 2 Humble rejects an explicitly empty "name:=" launch argument. These
+# paths are meaningful only for localization; mapping uses the launch-file
+# defaults and must not receive empty placeholders.
+if is_true "$LOCALIZATION_MODE"; then
+  cmd+=(
+    "localization_map_yaml:=$LOCALIZATION_MAP_YAML"
+    "cartographer_load_state_filename:=$LOCALIZATION_PBSTREAM")
+fi
 
 setsid stdbuf -oL -eL "${cmd[@]}" >>"$RUNTIME_LOG" 2>&1 &
 LAUNCH_PID=$!
