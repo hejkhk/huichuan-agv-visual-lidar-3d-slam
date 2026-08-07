@@ -235,6 +235,7 @@ class SystemResourceMonitor(Node):
         if any(token in value for token in (
             "dual_resolution_3d_slam.launch.py", "robot_state_publisher",
             "localization_bringup", "cartographer_reloc",
+            "slam_correction_guard",
         )):
             return "stack_misc"
         return None

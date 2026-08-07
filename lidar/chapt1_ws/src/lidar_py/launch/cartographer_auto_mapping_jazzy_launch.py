@@ -219,6 +219,7 @@ def generate_launch_description():
             "local_cloud_topic": LaunchConfiguration("local_cloud_topic"),
             "collision_stop_topic": "/local_cloud_collision_stop",
             "collision_status_topic": "/local_cloud_collision_status",
+            "slam_correction_hold_topic": "/slam_correction_hold",
             "navigation_sensor_health_topic":
                 "/robot/navigation_sensor_healthy",
             "local_cloud_timeout_sec": ParameterValue(
@@ -336,7 +337,7 @@ def generate_launch_description():
         DeclareLaunchArgument("start_cartographer", default_value="true"),
         DeclareLaunchArgument(
             "cartographer_config",
-            default_value="cartographer_2d_v9_nav_guarded.lua"),
+            default_value="cartographer_2d_v9_mapping_balanced.lua"),
         DeclareLaunchArgument("nav_params_file", default_value=default_nav_params),
         DeclareLaunchArgument(
             "controller_override_file", default_value=default_controller_override),

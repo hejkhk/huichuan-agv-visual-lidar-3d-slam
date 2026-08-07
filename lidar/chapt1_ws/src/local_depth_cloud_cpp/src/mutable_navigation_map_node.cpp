@@ -65,6 +65,8 @@ public:
       "scan_topic", "/scan_timed_v2_filtered");
     ready_topic_ = declare_parameter<std::string>(
       "localization_ready_topic", "/localization_ready");
+    correction_hold_topic_ = declare_parameter<std::string>(
+      "slam_correction_hold_topic", "/slam_correction_hold");
     map_frame_ = declare_parameter<std::string>("map_frame", "map");
 
     occupied_threshold_ = std::clamp(
@@ -116,6 +118,11 @@ public:
       ready_topic_, map_qos,
       std::bind(
         &MutableNavigationMapNode::on_localization_ready, this,
+        std::placeholders::_1));
+    correction_hold_sub_ = create_subscription<std_msgs::msg::Bool>(
+      correction_hold_topic_, map_qos,
+      std::bind(
+        &MutableNavigationMapNode::on_slam_correction_hold, this,
         std::placeholders::_1));
     scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
       scan_topic_, rclcpp::SensorDataQoS().keep_last(5),
@@ -220,11 +227,46 @@ private:
       "NAV_MAP_ACTIVE verified localization received; live map evidence enabled");
   }
 
+  void on_slam_correction_hold(const std_msgs::msg::Bool::SharedPtr msg)
+  {
+    const bool was_active = correction_hold_active_;
+    correction_hold_active_ = msg->data;
+    if (correction_hold_active_ == was_active) {
+      return;
+    }
+    if (!correction_hold_active_) {
+      RCLCPP_INFO(
+        get_logger(),
+        "NAV_MAP_LOOP_RELEASE correction hold ended; evidence resumes after freeze");
+      return;
+    }
+
+    ++loop_correction_resets_;
+    reset_evidence();
+    have_last_pose_ = false;
+    last_evidence_stamp_ns_ = 0;
+    if (restore_on_pose_jump_) {
+      restore_reference_map("Cartographer loop correction");
+    }
+    freeze_until_ = std::chrono::steady_clock::now() +
+      std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(freeze_after_jump_sec_));
+    RCLCPP_WARN(
+      get_logger(),
+      "NAV_MAP_LOOP_CORRECTION evidence reset, live edits restored from the "
+      "immutable reference, updates frozen for %.1fs",
+      freeze_after_jump_sec_);
+  }
+
   void on_scan(const sensor_msgs::msg::LaserScan::SharedPtr scan)
   {
     ++scans_received_;
     if (!map_loaded_ || !localization_ready_) {
       ++scans_not_ready_;
+      return;
+    }
+    if (correction_hold_active_) {
+      ++scans_frozen_;
       return;
     }
     if (scan->header.frame_id.empty() || scan->ranges.empty()) {
@@ -579,10 +621,12 @@ private:
   {
     if (!map_loaded_ || current_map_.data == reference_map_.data) {
       reset_evidence();
+      reset_pending_bounds();
       return;
     }
     current_map_ = reference_map_;
     reset_evidence();
+    reset_pending_bounds();
     publish_full_map();
     ++reference_restores_;
     RCLCPP_WARN(
@@ -610,7 +654,7 @@ private:
       get_logger(),
       "NAV_MAP_STATUS loaded=%s ready=%s scans=%llu processed=%llu "
       "not_ready=%llu throttled=%llu invalid=%llu tf_reject=%llu "
-      "origin_outside=%llu frozen=%llu pose_jump=%llu "
+      "origin_outside=%llu frozen=%llu pose_jump=%llu loop_reset=%llu "
       "marked=%llu cleared=%llu updates=%llu update_cells=%llu "
       "full=%llu restores=%llu process_avg=%.2fms process_max=%.2fms",
       map_loaded_ ? "true" : "false",
@@ -624,6 +668,7 @@ private:
       static_cast<unsigned long long>(origin_outside_map_),
       static_cast<unsigned long long>(scans_frozen_),
       static_cast<unsigned long long>(pose_jump_resets_),
+      static_cast<unsigned long long>(loop_correction_resets_),
       static_cast<unsigned long long>(cells_marked_),
       static_cast<unsigned long long>(cells_cleared_),
       static_cast<unsigned long long>(updates_published_),
@@ -638,6 +683,7 @@ private:
   std::string update_topic_;
   std::string scan_topic_;
   std::string ready_topic_;
+  std::string correction_hold_topic_;
   std::string map_frame_;
   int occupied_threshold_{65};
   int mark_confirmations_{3};
@@ -660,6 +706,7 @@ private:
   rclcpp::Publisher<map_msgs::msg::OccupancyGridUpdate>::SharedPtr update_pub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr reference_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr ready_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr correction_hold_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::TimerBase::SharedPtr update_timer_;
   rclcpp::TimerBase::SharedPtr full_map_timer_;
@@ -677,6 +724,7 @@ private:
   uint32_t scan_generation_{0U};
   bool map_loaded_{false};
   bool localization_ready_{false};
+  bool correction_hold_active_{false};
   bool have_last_pose_{false};
   double last_pose_x_{0.0};
   double last_pose_y_{0.0};
@@ -699,6 +747,7 @@ private:
   uint64_t tf_rejects_{0U};
   uint64_t origin_outside_map_{0U};
   uint64_t pose_jump_resets_{0U};
+  uint64_t loop_correction_resets_{0U};
   uint64_t cells_marked_{0U};
   uint64_t cells_cleared_{0U};
   uint64_t updates_published_{0U};

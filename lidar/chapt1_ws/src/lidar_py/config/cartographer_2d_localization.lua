@@ -64,4 +64,13 @@ POSE_GRAPH.constraint_builder.global_localization_min_score = 0.80
 POSE_GRAPH.constraint_builder.log_matches = true
 POSE_GRAPH.optimization_problem.huber_scale = 5.0
 
+-- Startup relocalization supplies a 0.5 degree-refined initial pose. Once the
+-- active trajectory starts, use the same corridor false-match protection as
+-- the proven mapping profile while continuing to optimize against every
+-- frozen PBStream submap.
+POSE_GRAPH.constraint_builder.fast_correlative_scan_matcher.linear_search_window = 1.5
+POSE_GRAPH.constraint_builder.fast_correlative_scan_matcher.angular_search_window = math.rad(3.0)
+TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
+POSE_GRAPH.max_num_final_iterations = 300
+
 return options

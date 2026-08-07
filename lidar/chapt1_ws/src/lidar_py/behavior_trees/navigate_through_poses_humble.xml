@@ -11,7 +11,7 @@
           <RemovePassedGoals input_goals="{goals}" output_goals="{goals}" radius="0.30"/>
           <Fallback name="KeepOrComputeCollisionCheckedPath">
             <ReactiveSequence name="KeepFreshValidPath">
-              <Inverter><PathExpiringTimer seconds="3.0" path="{path}"/></Inverter>
+              <Inverter><PathExpiringTimer seconds="1.0" path="{path}"/></Inverter>
               <Inverter><GoalUpdated/></Inverter>
               <IsPathValid path="{path}"/>
             </ReactiveSequence>

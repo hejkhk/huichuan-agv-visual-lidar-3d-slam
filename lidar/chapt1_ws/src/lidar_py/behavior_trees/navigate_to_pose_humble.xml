@@ -8,11 +8,12 @@
       <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
 
       <!-- Re-evaluate the global route every second and never retain it beyond
-           three seconds. This keeps dynamic 2D/3D obstacles in the decision. -->
+           one second. A Cartographer correction hold lasts 1.5 seconds, so a
+           pre-correction path is always replaced before motion resumes. -->
       <RateController hz="1.0">
         <Fallback name="KeepOrComputeCollisionCheckedPath">
           <ReactiveSequence name="KeepFreshValidPath">
-            <Inverter><PathExpiringTimer seconds="3.0" path="{path}"/></Inverter>
+            <Inverter><PathExpiringTimer seconds="1.0" path="{path}"/></Inverter>
             <Inverter><GlobalUpdatedGoal/></Inverter>
             <IsPathValid path="{path}"/>
           </ReactiveSequence>

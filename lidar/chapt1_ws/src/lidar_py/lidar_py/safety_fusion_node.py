@@ -13,7 +13,12 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import LaserScan, PointCloud2
 from std_msgs.msg import Bool, Int32MultiArray
 
@@ -62,6 +67,8 @@ class SafetyFusionNode(Node):
         )
         self.declare_parameter(
             "software_estop_topic", "/robot/emergency_stop_state")
+        self.declare_parameter(
+            "slam_correction_hold_topic", "/slam_correction_hold")
         self.declare_parameter("status_log_period_sec", 1.0)
 
         self.declare_parameter("max_v", 0.23)
@@ -136,6 +143,7 @@ class SafetyFusionNode(Node):
         self.baseline_seen = True
         self.baseline_ready = False
         self.software_estop = False
+        self.slam_correction_hold = False
         self.last_fuse_time = time.perf_counter()
         self.last_status_log = 0.0
         self.last_safe_cmd = Twist()
@@ -214,6 +222,14 @@ class SafetyFusionNode(Node):
         self.create_subscription(
             Bool, self.get_parameter("software_estop_topic").value,
             self._on_software_estop, 10)
+        correction_hold_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.create_subscription(
+            Bool, self.get_parameter("slam_correction_hold_topic").value,
+            self._on_slam_correction_hold, correction_hold_qos)
 
         self.publish_rate = max(
             1.0, float(self.get_parameter("publish_rate").value))
@@ -294,6 +310,9 @@ class SafetyFusionNode(Node):
 
     def _on_software_estop(self, msg: Bool) -> None:
         self.software_estop = bool(msg.data)
+
+    def _on_slam_correction_hold(self, msg: Bool) -> None:
+        self.slam_correction_hold = bool(msg.data)
 
     def _on_depth(self, msg: Int32MultiArray) -> None:
         data = list(msg.data)
@@ -556,6 +575,7 @@ class SafetyFusionNode(Node):
 
         if (
             self.software_estop
+            or self.slam_correction_hold
             or baseline_blocked
             or depth_required_missing
             or local_cloud_required_missing
@@ -566,6 +586,8 @@ class SafetyFusionNode(Node):
                 0.0, 0.0, DepthSample(), now, dt, depth_alive=False)
             if self.software_estop:
                 self.active_command_source = "software_estop"
+            elif self.slam_correction_hold:
+                self.active_command_source = "slam_correction_hold"
             elif baseline_blocked:
                 self.active_command_source = "baseline_lock"
             elif local_cloud_required_missing:
@@ -708,6 +730,7 @@ class SafetyFusionNode(Node):
                 f"score={self.depth_sample.left_score_x1000}/"
                 f"{self.depth_sample.right_score_x1000} "
                 f"baseline_ready={self.baseline_ready} "
+                f"slam_correction_hold={self.slam_correction_hold} "
                 f"software_estop={self.software_estop}")
 
 

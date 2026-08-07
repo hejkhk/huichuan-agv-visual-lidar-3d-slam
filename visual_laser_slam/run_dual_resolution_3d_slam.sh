@@ -373,14 +373,14 @@ LOCALIZATION_MODE="${DUAL_3D_LOCALIZATION_MODE:-false}"
 LOCALIZATION_MAP_YAML="${DUAL_3D_LOCALIZATION_MAP_YAML:-}"
 LOCALIZATION_PBSTREAM="${DUAL_3D_LOCALIZATION_PBSTREAM:-}"
 RVIZ_CONFIG_FILE="${DUAL_3D_RVIZ_CONFIG_FILE:-$SOURCE_WS/src/lidar_py/rviz/dual_resolution_3d_slam.rviz}"
-# A direct call to this runner with navigation enabled must not silently use
-# the mapping-only loop-closure threshold. An explicit DUAL_3D override remains
-# available for controlled experiments.
+# Every navigation entry point uses the same corridor-guarded online loop
+# closure that has been verified by the mapping launcher. Localization keeps
+# its frozen-map profile and continuous scan-to-map correction.
 if is_true "$ENABLE_NAVIGATION"; then
   if is_true "$LOCALIZATION_MODE"; then
     CARTOGRAPHER_CONFIG="cartographer_2d_localization.lua"
   else
-    CARTOGRAPHER_CONFIG="${DUAL_3D_CARTOGRAPHER_CONFIG:-cartographer_2d_v9_nav_guarded.lua}"
+    CARTOGRAPHER_CONFIG="${DUAL_3D_CARTOGRAPHER_CONFIG:-cartographer_2d_v9_mapping_balanced.lua}"
   fi
   # Keep NavigateToPose inactive while host Twist output is gated. PS2 remains
   # available during this staged startup; Nav2 activates only after mapping,
@@ -1232,6 +1232,7 @@ log "  2D SLAM config  : $CARTOGRAPHER_CONFIG"
   log "  RTAB auto-pause : ${RTABMAP_ON_DEMAND_PAUSE:-false} (false keeps loop closure alive)"
 log "  Navigation      : $ENABLE_NAVIGATION (SmacPlanner2D + smooth RPP / maneuverable DWB)"
 log "  Nav activation  : $(if is_true "$ENABLE_NAVIGATION"; then printf 'staged after sensor readiness'; else printf 'disabled'; fi)"
+log "  Loop correction : $(if is_true "$ENABLE_NAVIGATION"; then printf 'online, 1.5s motion hold + 1Hz replan'; else printf 'mapping only'; fi)"
 log "  Dynamic 3D layer: STVL=${ENABLE_STVL:-true} (bounded recent + filtered RTAB walls)"
 log "  2D scan input   : /scan_timed_v2_filtered (filter=$ENABLE_FIXED_SCAN_FILTER)"
 log "  Visual EKF      : $ENABLE_VISUAL_FUSION (RGB-D vx/vy + STM32 yaw/vx)"
@@ -1471,6 +1472,8 @@ fi
 
 if is_true "$ENABLE_NAVIGATION"; then
   log "[startup] Verifying the live collision input before activating Nav2..."
+  wait_topic /slam_correction_hold 10 || \
+    die "SLAM correction hold guard did not publish"
   wait_topic_publisher \
     "${LOCAL_SENSOR_CLOUD_TOPIC:-/local_highres_cloud_v21/sensor}" 15 || \
     die "Recent geometry-filtered navigation cloud did not start"
@@ -1577,6 +1580,7 @@ if is_true "$ENABLE_NAVIGATION"; then
   log "[navigation] Nav2 success, cancel or failure returns control to PS2 automatically."
   log "[navigation] Blue path=/plan; orange arc=/lookahead_arc; commands are open-loop rate smoothed."
   log "[navigation] Live 3 cm RGB-D obstacles + filtered persistent visual walls feed Nav2."
+  log "[navigation] Cartographer loop corrections pause motion, refresh the path, then resume."
   log "[navigation] Legacy depth baseline is disabled; 2D/3D collision watchdogs remain enabled."
 fi
 

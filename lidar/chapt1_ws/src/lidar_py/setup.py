@@ -99,6 +99,7 @@ setup(
             'cartographer_reloc = lidar_py.cartographer_reloc:main',
             'localization_bringup = lidar_py.localization_bringup:main',
             'system_resource_monitor = lidar_py.system_resource_monitor:main',
+            'slam_correction_guard = lidar_py.slam_correction_guard:main',
         ],
 
 

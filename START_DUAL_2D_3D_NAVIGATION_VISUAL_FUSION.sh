@@ -7,9 +7,9 @@ export DUAL_3D_ENABLE_NAVIGATION=true
 export DUAL_3D_ENABLE_VISUAL_FUSION=true
 export DUAL_3D_STACK_MODE=navigation_visual_fusion
 export USE_RVIZ="${USE_RVIZ:-true}"
-# Use exactly the same guarded Cartographer/Nav2 profile as the stable
+# Use exactly the same online-loop Cartographer/Nav2 profile as the stable
 # navigation launcher. The only A/B variable is the odom prediction source.
-export DUAL_3D_CARTOGRAPHER_CONFIG=cartographer_2d_v9_nav_guarded.lua
+export DUAL_3D_CARTOGRAPHER_CONFIG=cartographer_2d_v9_mapping_balanced.lua
 export DUAL_3D_DATABASE="maps/rtabmap_3d/rtabmap_nav_visual_fusion.db"
 # This dedicated database is intentionally persistent across runs so RTAB-Map
 # can recognize previously seen RGB-D places and optimize its internal 3D graph.

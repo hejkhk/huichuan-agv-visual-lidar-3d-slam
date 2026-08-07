@@ -101,6 +101,8 @@ for file in \
   "$LIDAR_SRC/lidar_py/cartographer_reloc.py" \
   "$LIDAR_SRC/lidar_py/localization_bringup.py" \
   "$LIDAR_SRC/lidar_py/system_resource_monitor.py" \
+  "$LIDAR_SRC/lidar_py/slam_correction_logic.py" \
+  "$LIDAR_SRC/lidar_py/slam_correction_guard.py" \
   "$LOCAL_DEPTH_SRC/src/mutable_navigation_map_node.cpp" \
   "$LIDAR_SRC/rviz/dual_resolution_3d_localization.rviz" \
   "$ROOT_DIR/lidar/chapt1_ws/src/reloc_rviz_panel/reloc_panel_plugin.xml" \
@@ -245,6 +247,9 @@ for name in ("navigate_to_pose_humble.xml", "navigate_through_poses_humble.xml")
     for forbidden in ("error_code_id=", "WouldAPlannerRecoveryHelp", "WouldAControllerRecoveryHelp"):
         if forbidden in text:
             raise SystemExit(f"Jazzy BT port/node leaked into {name}: {forbidden}")
+    if 'PathExpiringTimer seconds="1.0"' not in text:
+        raise SystemExit(
+            f"{name} can retain a pre-loop-correction path for too long")
     if name == "navigate_to_pose_humble.xml":
         for required in (
                 "InitialPathPreRotate", "SpinSafetyCheck", "SelectController",
@@ -277,6 +282,8 @@ for required in (
     '"depth_camera_info_qos": "DEFAULT"',
     "system_resource_monitor",
     "resource_usage_csv_file",
+    "slam_correction_guard",
+    '"hold_topic": "/slam_correction_hold"',
 ):
     if required not in dual:
         raise SystemExit(f"dual-resolution launch does not select {required}")
@@ -292,6 +299,7 @@ mutable_map = (
 for required in (
         "mark_confirmations", "clear_confirmations", "collect_ray_cells",
         "NAV_MAP_POSE_JUMP", "restore_reference_on_pose_jump",
+        "NAV_MAP_LOOP_CORRECTION", "slam_correction_hold_topic",
         "OccupancyGridUpdate", "localization_ready"):
     if required not in mutable_map:
         raise SystemExit(f"mutable navigation map safety contract missing: {required}")
@@ -306,6 +314,54 @@ for required in (
 setup_text = (root / "setup.py").read_text(encoding="utf-8")
 if "system_resource_monitor = lidar_py.system_resource_monitor:main" not in setup_text:
     raise SystemExit("resource monitor console entry point is missing")
+if "slam_correction_guard = lidar_py.slam_correction_guard:main" not in setup_text:
+    raise SystemExit("SLAM correction guard console entry point is missing")
+
+guard = (root / "lidar_py" / "slam_correction_guard.py").read_text(
+    encoding="utf-8")
+for required in (
+        'lookup_transform(', 'self.map_frame,', 'self.odom_frame,',
+        '"/slam_correction_hold"', "SLAM_CORRECTION_HOLD",
+        "SlamCorrectionDetector"):
+    if required not in guard:
+        raise SystemExit(f"SLAM correction guard contract missing: {required}")
+
+safety = (root / "lidar_py" / "safety_fusion_node.py").read_text(
+    encoding="utf-8")
+for required in (
+        "slam_correction_hold_topic", "self.slam_correction_hold",
+        "DurabilityPolicy.TRANSIENT_LOCAL",
+        'self.active_command_source = "slam_correction_hold"'):
+    if required not in safety:
+        raise SystemExit(f"velocity hold contract missing: {required}")
+
+project_root = root.parents[3]
+online_loop_entry_points = (
+    project_root / "START_DUAL_2D_3D_NAVIGATION.sh",
+    project_root / "START_DUAL_2D_3D_NAVIGATION_VISUAL_FUSION.sh",
+    project_root / "visual_laser_slam" / "run_dual_resolution_3d_slam.sh",
+)
+for entry_point in online_loop_entry_points:
+    entry_text = entry_point.read_text(encoding="utf-8")
+    if "cartographer_2d_v9_mapping_balanced.lua" not in entry_text:
+        raise SystemExit(
+            f"{entry_point.name} must use the proven online loop profile")
+    if "cartographer_2d_v9_nav_guarded.lua" in entry_text:
+        raise SystemExit(
+            f"{entry_point.name} still disables online loop optimization")
+
+localization_config = (
+    root / "config" / "cartographer_2d_localization.lua"
+).read_text(encoding="utf-8")
+for required in (
+        "POSE_GRAPH.optimize_every_n_nodes = 40",
+        "POSE_GRAPH.constraint_builder.sampling_ratio = 0.8",
+        "fast_correlative_scan_matcher.linear_search_window = 1.5",
+        "fast_correlative_scan_matcher.angular_search_window = math.rad(3.0)",
+        "pure_localization_trimmer"):
+    if required not in localization_config:
+        raise SystemExit(
+            f"localization loop-closure contract missing: {required}")
 
 localization_launch = (
     root / "launch" / "cartographer_scan_v2_localization_launch.py"
@@ -361,6 +417,7 @@ for required in (
         ".short-goal-bt-source.sha256", "skipping colcon",
         "wait_transient_topic /localization_reference_map 30",
         "wait_topic_publisher /map_updates 15",
+        "wait_topic /slam_correction_hold 10",
         "resource_usage.csv"):
     if required not in runner:
         raise SystemExit(

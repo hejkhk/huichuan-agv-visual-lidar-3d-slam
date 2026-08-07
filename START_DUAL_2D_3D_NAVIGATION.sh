@@ -6,9 +6,10 @@ cd "$ROOT_DIR"
 export DUAL_3D_ENABLE_NAVIGATION=true
 export DUAL_3D_STACK_MODE=navigation
 export USE_RVIZ="${USE_RVIZ:-true}"
-# Navigation-specific pose-graph guard. Mapping-only startup keeps the
-# finalized V9 Cartographer profile unchanged.
-export DUAL_3D_CARTOGRAPHER_CONFIG=cartographer_2d_v9_nav_guarded.lua
+# Navigation uses the same proven online loop closure as mapping. The profile
+# already constrains corridor matches to 1.5 m / 3 degrees; the runtime
+# correction guard pauses motion while Nav2 replaces a pre-correction path.
+export DUAL_3D_CARTOGRAPHER_CONFIG=cartographer_2d_v9_mapping_balanced.lua
 # A new Cartographer map cannot share coordinates with an old RTAB-Map graph.
 # Keep navigation runs isolated so historical 3D cubes cannot overlap a new 2D map.
 export DUAL_3D_DATABASE="maps/rtabmap_3d/rtabmap_nav_live.db"

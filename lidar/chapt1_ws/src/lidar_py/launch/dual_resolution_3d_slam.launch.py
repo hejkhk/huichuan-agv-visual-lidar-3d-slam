@@ -292,6 +292,7 @@ def generate_launch_description():
             "update_topic": "/map_updates",
             "scan_topic": LaunchConfiguration("filtered_scan_topic"),
             "localization_ready_topic": "/localization_ready",
+            "slam_correction_hold_topic": "/slam_correction_hold",
             "map_frame": "map",
             "occupied_threshold": 65,
             "mark_confirmations": typed(
@@ -839,6 +840,31 @@ def generate_launch_description():
         }],
     )
 
+    slam_correction_guard = Node(
+        package="lidar_py",
+        executable="slam_correction_guard",
+        name="slam_correction_guard",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_navigation")),
+        parameters=[{
+            "map_frame": "map",
+            "odom_frame": "odom",
+            "hold_topic": "/slam_correction_hold",
+            "status_topic": "/slam_correction/status",
+            "sample_rate_hz": 30.0,
+            "translation_threshold_m": 0.10,
+            "yaw_threshold_deg": 0.50,
+            "window_sec": 0.50,
+            "window_translation_threshold_m": 0.15,
+            "window_yaw_threshold_deg": 1.0,
+            "max_sample_gap_sec": 1.0,
+            # /map and both costmaps publish at up to 1 Hz. Keep motion held
+            # until a fresh global path has had time to replace the old one.
+            "hold_sec": 1.50,
+            "startup_grace_sec": 2.0,
+        }],
+    )
+
     rtabmap_viz = Node(
         package="rtabmap_viz",
         executable="rtabmap_viz",
@@ -942,6 +968,7 @@ def generate_launch_description():
         rtabmap,
         rtabmap_loop_monitor,
         resource_monitor,
+        slam_correction_guard,
         rtabmap_viz,
         rtabmap_demand_manager,
         navigation,

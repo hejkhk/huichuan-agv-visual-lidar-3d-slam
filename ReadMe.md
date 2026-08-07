@@ -1380,6 +1380,17 @@ Nav2 并解除主机运动锁；失败时车辆保持不动，RViz 面板会显�
 `/imu_cartographer` 和 2D 雷达，并保留当前 Cartographer 回环优化。现有 Gemini2 实时点云、
 STVL、长期视觉墙、最终碰撞门和底盘安全链路均继续运行。
 
+普通导航版现在直接使用与建图版相同的
+`cartographer_2d_v9_mapping_balanced.lua`。重定位版的
+`cartographer_2d_localization.lua` 同步了相同的在线回环约束：局部匹配窗口保持
+`0.06 m/2 deg`，跨子图匹配限制为 `1.5 m/3 deg`。重定位版仍额外保留冻结 PBSTREAM
+和最多 `5` 个活动子图，因此不是重新建一张互不相干的地图，而是在旧图约束下持续纠正当前位姿。
+
+运行中若 Cartographer 更新 `map -> odom` 超过瞬时 `0.10 m/0.5 deg`，或在 `0.5 秒`内累计
+超过 `0.15 m/1 deg`，`slam_correction_guard` 会让安全仲裁锁住零速度至少 `1.5 秒`。
+Nav2 路径有效期为 `1 秒`，所以车辆恢复前必定重新计算校正后路径。重定位模式还会丢弃
+校正前的雷达证据、恢复不可变参考图并短暂冻结增量更新，避免旧坐标证据污染 `/map`。
+
 ### 重定位模式的实时二维地图
 
 ```text
@@ -1398,6 +1409,9 @@ Loc_MAP/*.yaml + *.pgm
 - 未知区域不会被自由射线自动改成可通行区域；当前地图尺寸也不会越过所选 PGM 边界扩张。
 - `/localization_ready=false`、时间戳 TF 缺失、相邻扫描位姿跳变超过 `0.35 m/20 deg`
   时停止更新。发生位姿跳变会恢复只读参考图并冻结两秒，避免错误定位污染导航地图。
+- Cartographer 在线回环触发 `/slam_correction_hold` 时，同样恢复只读参考图并清空校正前证据；
+  `/map` 随后继续根据新坐标系中的连续雷达确认更新，原图始终保留在
+  `/localization_reference_map` 中不变。
 - 重定位 RViz 默认显示 `Live Mutable Navigation Map`；需要对比原图时手动勾选
   `Selected Reference Map (Immutable Audit)`。
 
