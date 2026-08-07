@@ -54,7 +54,7 @@ done
 required_packages=(
   laser_filters rtabmap_slam rtabmap_odom octomap_server \
   robot_localization nav2_controller nav2_planner nav2_bt_navigator \
-  nav2_behaviors nav2_velocity_smoother nav2_smac_planner \
+  nav2_behaviors nav2_velocity_smoother nav2_navfn_planner nav2_smac_planner \
   nav2_rotation_shim_controller nav2_regulated_pure_pursuit_controller \
   dwb_core dwb_plugins dwb_critics behaviortree_cpp_v3 \
   spatio_temporal_voxel_layer map_msgs \

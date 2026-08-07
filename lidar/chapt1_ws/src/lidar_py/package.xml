@@ -33,6 +33,7 @@
   <depend>nav2_bt_navigator</depend>
   <depend>nav2_lifecycle_manager</depend>
   <depend>nav2_costmap_2d</depend>
+  <depend>nav2_navfn_planner</depend>
   <depend>nav2_smac_planner</depend>
   <depend>nav2_regulated_pure_pursuit_controller</depend>
   <depend>nav2_rotation_shim_controller</depend>

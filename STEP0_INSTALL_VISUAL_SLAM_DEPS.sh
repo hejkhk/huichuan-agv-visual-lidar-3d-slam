@@ -26,6 +26,7 @@ sudo apt install -y \
   ros-humble-robot-localization \
   ros-humble-navigation2 \
   ros-humble-nav2-bringup \
+  ros-humble-nav2-navfn-planner \
   ros-humble-nav2-regulated-pure-pursuit-controller \
   ros-humble-spatio-temporal-voxel-layer \
   ros-humble-rmw-cyclonedds-cpp \
