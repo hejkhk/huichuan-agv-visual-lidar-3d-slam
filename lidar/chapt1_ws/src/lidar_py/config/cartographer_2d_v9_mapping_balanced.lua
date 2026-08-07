@@ -1,11 +1,10 @@
 include "cartographer_2d_v9_tightened.lua"
 
--- Mapping-only refinement of the proven V9 profile. A slightly wider local
--- search absorbs small skid/IMU prediction errors during turns. The existing
--- translation and rotation penalties remain unchanged, so scan evidence must
--- still justify any correction.
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.07
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(2.5)
+-- Keep the proven V9 local matcher unchanged. Widening this to 0.07 m / 2.5
+-- degrees made the live map temporarily rotate in repetitive corridors until
+-- a later loop closure corrected it.
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.06
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(2.0)
 
 -- V9 already limits which submaps are considered to 3 m, but Cartographer's
 -- inherited inter-submap matcher can still move a selected constraint by up

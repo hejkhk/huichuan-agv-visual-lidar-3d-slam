@@ -172,7 +172,7 @@ class SystemResourceMonitor(Node):
                     value /= 1000.0
                 if 0.0 < value < 150.0:
                     temperatures.append(value)
-            except (OSError, ValueError):
+            except (OSError, ValueError, TypeError, UnicodeError):
                 continue
         return max(temperatures) if temperatures else None
 
