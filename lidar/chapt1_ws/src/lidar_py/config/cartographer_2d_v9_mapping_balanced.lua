@@ -6,6 +6,13 @@ include "cartographer_2d_v9_tightened.lua"
 TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.06
 TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(2.0)
 
+-- Cartographer cannot rebuild a frozen submap texture after pose-graph
+-- optimization. Shorter mapping-only submaps limit how much pre-loop drift can
+-- remain baked into one texture while retaining enough corridor structure for
+-- reliable matching. Active submaps overlap, so this reduces the maximum
+-- insertion span from roughly 240 scans to 160 scans.
+TRAJECTORY_BUILDER_2D.submaps.num_range_data = 80
+
 -- V9 already limits which submaps are considered to 3 m, but Cartographer's
 -- inherited inter-submap matcher can still move a selected constraint by up
 -- to 7 m / 30 degrees. Repetitive corridor walls produced accepted 7.13 m /

@@ -123,7 +123,7 @@ class SystemResourceMonitor(Node):
                 self.csv_handle.flush()
         except OSError as exc:
             self.get_logger().error(
-                "RESOURCE_MONITOR cannot open CSV %s: %s", path, exc
+                f"RESOURCE_MONITOR cannot open CSV {path}: {exc}"
             )
             self.csv_handle = None
             self.csv_writer = None
@@ -386,10 +386,10 @@ class SystemResourceMonitor(Node):
         stamp = datetime.now().astimezone().isoformat(timespec="seconds")
         temp_text = f"{temperature:.1f}C" if temperature is not None else "n/a"
         self.get_logger().info(
-            "RESOURCE_SYSTEM cpu=%.1f%% load1=%.2f memory=%.0f/%.0fMB "
-            "available=%.0fMB temp=%s disk_free=%.1fGB run_dir=%.1fMB",
-            system_cpu, load_1m, memory_used, memory_total,
-            memory_available, temp_text, disk_free_gb, run_directory_mb,
+            f"RESOURCE_SYSTEM cpu={system_cpu:.1f}% load1={load_1m:.2f} "
+            f"memory={memory_used:.0f}/{memory_total:.0f}MB "
+            f"available={memory_available:.0f}MB temp={temp_text} "
+            f"disk_free={disk_free_gb:.1f}GB run_dir={run_directory_mb:.1f}MB"
         )
 
         for name in GROUP_ORDER:
@@ -420,14 +420,13 @@ class SystemResourceMonitor(Node):
                 "run_directory_mb": f"{run_directory_mb:.3f}",
             }
             self.get_logger().info(
-                "RESOURCE_GROUP name=%s processes=%d cpu=%.1f%% rss=%.1fMB "
-                "threads=%.1f io_read=%.3fMB/s io_write=%.3fMB/s",
-                name, row["process_count"],
-                aggregate["cpu"] / samples,
-                aggregate["rss"] / samples,
-                aggregate["threads"] / samples,
-                aggregate["read"] / samples,
-                aggregate["write"] / samples,
+                f"RESOURCE_GROUP name={name} "
+                f"processes={row['process_count']} "
+                f"cpu={aggregate['cpu'] / samples:.1f}% "
+                f"rss={aggregate['rss'] / samples:.1f}MB "
+                f"threads={aggregate['threads'] / samples:.1f} "
+                f"io_read={aggregate['read'] / samples:.3f}MB/s "
+                f"io_write={aggregate['write'] / samples:.3f}MB/s"
             )
             if self.csv_writer is not None:
                 self.csv_writer.writerow(row)
@@ -438,9 +437,9 @@ class SystemResourceMonitor(Node):
             temperature is not None and temperature >= 80.0
         ):
             self.get_logger().warn(
-                "RESOURCE_PRESSURE cpu=%.1f%% available=%.0fMB temp=%s; "
-                "inspect resource_usage.csv before changing SLAM parameters",
-                system_cpu, memory_available, temp_text,
+                f"RESOURCE_PRESSURE cpu={system_cpu:.1f}% "
+                f"available={memory_available:.0f}MB temp={temp_text}; "
+                "inspect resource_usage.csv before changing SLAM parameters"
             )
         if self.csv_handle is not None:
             self.csv_handle.flush()
