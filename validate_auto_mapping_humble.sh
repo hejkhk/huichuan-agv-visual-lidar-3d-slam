@@ -8,8 +8,27 @@ ORBBEC_SRC="$ROOT_DIR/lidar/chapt1_ws/src/OrbbecSDK_ROS2"
 SYSTEM_PYTHON="${CAR_SYSTEM_PYTHON:-/usr/bin/python3}"
 BUILD_ROOT="${CAR_HUMBLE_BUILD_ROOT:-$HOME/.cache/huichuan_agv_humble_ws}"
 
-fail() { echo "[FAIL] $*" >&2; exit 1; }
+fail() {
+  local message="$*"
+  echo "[FAIL] $message" >&2
+  if [ "${GITHUB_ACTIONS:-false}" = "true" ]; then
+    message="${message//%/%25}"
+    message="${message//$'\r'/%0D}"
+    message="${message//$'\n'/%0A}"
+    printf '::error title=Humble preflight::%s\n' "$message" >&2
+  fi
+  exit 1
+}
 pass() { echo "[PASS] $*"; }
+
+compact_errors() {
+  local file="$1"
+  {
+    grep -Eai \
+      'error|exception|failed|failure|invalid|not found|unknown|could not|cannot' \
+      "$file" 2>/dev/null || true
+  } | tail -n 12 | tr '\n' ';' | cut -c 1-3500
+}
 
 if [ -r /etc/os-release ]; then
   # shellcheck disable=SC1091
@@ -537,12 +556,17 @@ if [ "${1:-}" = "--build" ]; then
     fail "Build source path exists and is not a symlink: $BUILD_ROOT/src"
   fi
   ln -s "$ROOT_DIR/lidar/chapt1_ws/src" "$BUILD_ROOT/src"
-  PYTHONNOUSERSITE=1 colcon --log-base "$BUILD_ROOT/log" build \
-    --base-paths "$BUILD_ROOT/src" \
-    --build-base "$BUILD_ROOT/build" \
-    --install-base "$BUILD_ROOT/install" \
-    --symlink-install "${BUILD_SELECTION[@]}" \
-    --cmake-args "-DPython3_EXECUTABLE=$SYSTEM_PYTHON" || fail "Humble build failed"
+  BUILD_LOG="$BUILD_ROOT/colcon_build.log"
+  if ! PYTHONNOUSERSITE=1 colcon --log-base "$BUILD_ROOT/log" build \
+      --base-paths "$BUILD_ROOT/src" \
+      --build-base "$BUILD_ROOT/build" \
+      --install-base "$BUILD_ROOT/install" \
+      --symlink-install "${BUILD_SELECTION[@]}" \
+      --cmake-args "-DPython3_EXECUTABLE=$SYSTEM_PYTHON" \
+      2>&1 | tee "$BUILD_LOG"; then
+    build_detail="$(compact_errors "$BUILD_LOG")"
+    fail "Humble build failed${build_detail:+: $build_detail}"
+  fi
   pass "Humble workspace build"
 
   # Load exactly the overlay built above, then configure the real Humble
@@ -623,11 +647,17 @@ PY
 
     transition="$(timeout 20 ros2 lifecycle set "/$node" configure 2>&1 || true)"
     if ! grep -Fqi "Transitioning successful" <<<"$transition"; then
+      diagnostic="$(
+        {
+          printf '%s\n' "$transition"
+          compact_errors "$log_file"
+        } | tail -n 14 | tr '\n' ';' | cut -c 1-3500
+      )"
       echo "$transition" >&2
       cat "$log_file" >&2 || true
       kill -TERM "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
-      fail "$node rejected Humble parameters or plugin class IDs"
+      fail "$node rejected Humble parameters or plugin class IDs${diagnostic:+: $diagnostic}"
     fi
     kill -TERM "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
