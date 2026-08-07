@@ -3,6 +3,7 @@ set -Eeo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIDAR_SRC="$ROOT_DIR/lidar/chapt1_ws/src/lidar_py"
+LOCAL_DEPTH_SRC="$ROOT_DIR/lidar/chapt1_ws/src/local_depth_cloud_cpp"
 ORBBEC_SRC="$ROOT_DIR/lidar/chapt1_ws/src/OrbbecSDK_ROS2"
 SYSTEM_PYTHON="${CAR_SYSTEM_PYTHON:-/usr/bin/python3}"
 BUILD_ROOT="${CAR_HUMBLE_BUILD_ROOT:-$HOME/.cache/huichuan_agv_humble_ws}"
@@ -37,7 +38,7 @@ required_packages=(
   nav2_behaviors nav2_velocity_smoother nav2_smac_planner \
   nav2_rotation_shim_controller nav2_regulated_pure_pursuit_controller \
   dwb_core dwb_plugins dwb_critics behaviortree_cpp_v3 \
-  spatio_temporal_voxel_layer \
+  spatio_temporal_voxel_layer map_msgs \
   rmw_cyclonedds_cpp depth_image_proc robot_state_publisher xacro
 )
 if [ "${CAR_VALIDATION_SKIP_EXTERNAL:-0}" != "1" ]; then
@@ -99,6 +100,8 @@ for file in \
   "$LIDAR_SRC/config/cartographer_2d_localization.lua" \
   "$LIDAR_SRC/lidar_py/cartographer_reloc.py" \
   "$LIDAR_SRC/lidar_py/localization_bringup.py" \
+  "$LIDAR_SRC/lidar_py/system_resource_monitor.py" \
+  "$LOCAL_DEPTH_SRC/src/mutable_navigation_map_node.cpp" \
   "$LIDAR_SRC/rviz/dual_resolution_3d_localization.rviz" \
   "$ROOT_DIR/lidar/chapt1_ws/src/reloc_rviz_panel/reloc_panel_plugin.xml" \
   "$LIDAR_SRC/config/nav2_auto_mapping_humble.yaml" \
@@ -222,6 +225,12 @@ for costmap_name in ("local_costmap", "global_costmap"):
     if params["static_layer"].get("footprint_clearing_enabled") is not True:
         raise SystemExit(
             f"{costmap_name} must clear stale static cells below the robot footprint")
+    if params["static_layer"].get("map_topic") != "/map":
+        raise SystemExit(f"{costmap_name} StaticLayer must consume mutable /map")
+    if params["static_layer"].get("subscribe_to_updates") is not True:
+        raise SystemExit(f"{costmap_name} StaticLayer must consume /map_updates")
+    if params.get("use_maximum") is not True:
+        raise SystemExit(f"{costmap_name} lost maximum safety combination")
     inflation = dwb[costmap_name][costmap_name]["ros__parameters"]["inflation_layer"]
     if inflation.get("inflation_radius") != 0.10:
         raise SystemExit(f"{costmap_name} inflation radius changed")
@@ -255,15 +264,48 @@ for required in (
     '"max_input_age_ms": 250.0',
     "cartographer_scan_v2_localization_launch.py",
     "localization_map_server",
+    "mutable_navigation_map_node",
+    '"topic_name": "/localization_reference_map"',
+    '"reference_map_topic": "/localization_reference_map"',
+    '"output_map_topic": "/map"',
+    '"update_topic": "/map_updates"',
     "cartographer_reloc",
     "localization_bringup",
     '"strong_match_score": 0.75',
     '"strong_match_min_margin": 0.012',
     '"depth_qos": "DEFAULT"',
     '"depth_camera_info_qos": "DEFAULT"',
+    "system_resource_monitor",
+    "resource_usage_csv_file",
 ):
     if required not in dual:
         raise SystemExit(f"dual-resolution launch does not select {required}")
+if dual.count('"output_map_topic": "/map"') != 1:
+    raise SystemExit("localization mode must have exactly one explicit /map owner")
+if '"topic_name": "/map"' in dual:
+    raise SystemExit("reference map_server must never publish the mutable /map")
+
+mutable_map = (
+    root.parent / "local_depth_cloud_cpp" / "src" /
+    "mutable_navigation_map_node.cpp"
+).read_text(encoding="utf-8")
+for required in (
+        "mark_confirmations", "clear_confirmations", "collect_ray_cells",
+        "NAV_MAP_POSE_JUMP", "restore_reference_on_pose_jump",
+        "OccupancyGridUpdate", "localization_ready"):
+    if required not in mutable_map:
+        raise SystemExit(f"mutable navigation map safety contract missing: {required}")
+resource_monitor = (
+    root / "lidar_py" / "system_resource_monitor.py"
+).read_text(encoding="utf-8")
+for required in (
+        "RESOURCE_SYSTEM", "RESOURCE_GROUP", "RESOURCE_PRESSURE",
+        "CSV_FIELDS", '"camera"', '"cartographer"', '"nav2"'):
+    if required not in resource_monitor:
+        raise SystemExit(f"resource monitor contract missing: {required}")
+setup_text = (root / "setup.py").read_text(encoding="utf-8")
+if "system_resource_monitor = lidar_py.system_resource_monitor:main" not in setup_text:
+    raise SystemExit("resource monitor console entry point is missing")
 
 localization_launch = (
     root / "launch" / "cartographer_scan_v2_localization_launch.py"
@@ -316,7 +358,10 @@ if "wait_topic /cartographer_pose_odom 30" not in runner:
     raise SystemExit("mapping launcher must still verify Cartographer corrected pose")
 for required in (
         "queue_incremental_package", ".lidar-py-source.sha256",
-        ".short-goal-bt-source.sha256", "skipping colcon"):
+        ".short-goal-bt-source.sha256", "skipping colcon",
+        "wait_transient_topic /localization_reference_map 30",
+        "wait_topic_publisher /map_updates 15",
+        "resource_usage.csv"):
     if required not in runner:
         raise SystemExit(
             f"per-package incremental build contract is missing: {required}")

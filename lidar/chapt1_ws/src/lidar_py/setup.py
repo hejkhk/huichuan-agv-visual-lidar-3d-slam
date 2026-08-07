@@ -97,6 +97,7 @@ setup(
             'camera_lidar_yaw_calibrator = lidar_py.camera_lidar_yaw_calibrator:main',
             'cartographer_reloc = lidar_py.cartographer_reloc:main',
             'localization_bringup = lidar_py.localization_bringup:main',
+            'system_resource_monitor = lidar_py.system_resource_monitor:main',
         ],
 
 

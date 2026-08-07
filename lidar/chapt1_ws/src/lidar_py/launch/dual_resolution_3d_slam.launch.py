@@ -56,6 +56,12 @@ def generate_launch_description():
         DeclareLaunchArgument("localization_mode", default_value="false"),
         DeclareLaunchArgument("localization_map_yaml", default_value=""),
         DeclareLaunchArgument(
+            "mutable_map_mark_confirmations", default_value="3"),
+        DeclareLaunchArgument(
+            "mutable_map_clear_confirmations", default_value="20"),
+        DeclareLaunchArgument(
+            "mutable_map_evidence_rate", default_value="5.0"),
+        DeclareLaunchArgument(
             "cartographer_load_state_filename", default_value=""),
         DeclareLaunchArgument(
             "rviz_config_file", default_value=rviz_config),
@@ -143,6 +149,15 @@ def generate_launch_description():
         DeclareLaunchArgument("global_3d_voxel", default_value="0.08"),
         DeclareLaunchArgument("global_3d_range_max", default_value="4.0"),
         DeclareLaunchArgument("use_octomap", default_value="true"),
+        DeclareLaunchArgument("enable_resource_monitor", default_value="true"),
+        DeclareLaunchArgument(
+            "resource_monitor_report_interval", default_value="20.0"),
+        DeclareLaunchArgument(
+            "resource_usage_csv_file", default_value=""),
+        DeclareLaunchArgument(
+            "resource_monitor_project_root", default_value=""),
+        DeclareLaunchArgument(
+            "resource_monitor_run_directory", default_value=""),
 
         DeclareLaunchArgument("local_cloud_topic", default_value="/local_highres_cloud_v21"),
         DeclareLaunchArgument(
@@ -260,8 +275,39 @@ def generate_launch_description():
         parameters=[{
             "use_sim_time": False,
             "yaml_filename": LaunchConfiguration("localization_map_yaml"),
-            "topic_name": "/map",
+            "topic_name": "/localization_reference_map",
             "frame_id": "map",
+        }],
+    )
+
+    mutable_navigation_map = Node(
+        package="local_depth_cloud_cpp",
+        executable="mutable_navigation_map_node",
+        name="mutable_navigation_map",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("localization_mode")),
+        parameters=[{
+            "reference_map_topic": "/localization_reference_map",
+            "output_map_topic": "/map",
+            "update_topic": "/map_updates",
+            "scan_topic": LaunchConfiguration("filtered_scan_topic"),
+            "localization_ready_topic": "/localization_ready",
+            "map_frame": "map",
+            "occupied_threshold": 65,
+            "mark_confirmations": typed(
+                "mutable_map_mark_confirmations", int),
+            "clear_confirmations": typed(
+                "mutable_map_clear_confirmations", int),
+            "max_evidence_rate_hz": typed(
+                "mutable_map_evidence_rate", float),
+            "update_publish_rate_hz": 2.0,
+            "full_publish_period_sec": 30.0,
+            "max_ray_range": 12.0,
+            "endpoint_clearance_m": 0.12,
+            "pose_jump_translation_m": 0.35,
+            "pose_jump_yaw_deg": 20.0,
+            "freeze_after_pose_jump_sec": 2.0,
+            "restore_reference_on_pose_jump": True,
         }],
     )
 
@@ -286,7 +332,7 @@ def generate_launch_description():
         output="screen",
         condition=IfCondition(LaunchConfiguration("localization_mode")),
         parameters=[{
-            "map_topic": "/map",
+            "map_topic": "/localization_reference_map",
             "scan_topic": LaunchConfiguration("filtered_scan_topic"),
             "odom_topic": "/odom",
             "base_frame": "base_link",
@@ -775,6 +821,24 @@ def generate_launch_description():
         }],
     )
 
+    resource_monitor = Node(
+        package="lidar_py",
+        executable="system_resource_monitor",
+        name="system_resource_monitor",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_resource_monitor")),
+        parameters=[{
+            "sample_interval_sec": 2.0,
+            "report_interval_sec": typed(
+                "resource_monitor_report_interval", float),
+            "csv_file": LaunchConfiguration("resource_usage_csv_file"),
+            "project_root": LaunchConfiguration(
+                "resource_monitor_project_root"),
+            "run_directory": LaunchConfiguration(
+                "resource_monitor_run_directory"),
+        }],
+    )
+
     rtabmap_viz = Node(
         package="rtabmap_viz",
         executable="rtabmap_viz",
@@ -862,6 +926,7 @@ def generate_launch_description():
         localization_2d,
         localization_map_server,
         localization_map_lifecycle,
+        mutable_navigation_map,
         cartographer_reloc,
         localization_bringup,
         camera,
@@ -876,6 +941,7 @@ def generate_launch_description():
         visual_ekf,
         rtabmap,
         rtabmap_loop_monitor,
+        resource_monitor,
         rtabmap_viz,
         rtabmap_demand_manager,
         navigation,

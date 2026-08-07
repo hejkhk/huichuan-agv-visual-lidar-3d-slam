@@ -4279,3 +4279,24 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
 - 一键启动的增量编译从“固定选择全部本地包”改为逐包SHA-256指纹。只有源码变化或安装缺失的
   `local_depth_cloud_cpp`、`lidar_py`、`frontier_exploration_ros2`、`short_goal_bt`、
   `reloc_rviz_panel`会进入 `colcon`；构建成功后才更新指纹，未变化时完全跳过colcon。
+
+## 2026-08-07 重定位导航地图实时更新与资源审计
+
+- 将所选 YAML/PGM 从 `/map` 分离到只读 `/localization_reference_map`。它只供
+  `cartographer_reloc` 做冷启动和手动重定位，不再直接作为 Nav2 永久静态层。
+- 新增 C++ `mutable_navigation_map_node`，它独占发布 `/map` 和 `/map_updates`。新雷达障碍
+  连续 3 帧确认后写入；旧占用格经过 20 个不同扫描帧的自由射线确认后清除，证据最高 5 Hz，
+  清除通常约 4 秒。未知区不自动清空，地图不越过 PGM 边界扩张。
+- 同一栅格每帧只计一次，清空射线在真实回波前 12 cm 停止。TF 缺失不更新；相邻证据帧
+  出现 0.35 m 或 20 度跳变时恢复原参考图、清空证据并冻结 2 秒。
+- 只有 `/localization_ready=true` 才接收实时修改。手动重定位开始后立即冻结并恢复参考图，
+  成功后重新积累证据；失败时 Nav2 和地图修改都保持锁定。
+- Nav2 两个 StaticLayer 继续订阅 `/map`，并通过现有 `subscribe_to_updates=true` 消费增量，
+  原有 2D 雷达、6/8 秒 STVL、15 秒视觉墙和 C++ 最终碰撞门全部保留。
+- 新增 `/proc` 资源监控，每 20 秒在 `runtime.log` 按相机、Cartographer、RTAB/OctoMap、
+  Nav2、3D感知、底盘/雷达、RViz和网页分组输出 CPU、RSS、线程与 I/O；完整数据写入本次
+  会话的 `resource_usage.csv`，同时记录内存、负载、温度、磁盘余量和日志体积。
+- 修复运行器未初始化 `LOG_DIR` 导致 Orbbec 帧时间戳 CSV 可能落到根目录的问题；现在
+  `orbbec_frame_timestamp.csv` 和资源 CSV 都固定进入当前 `SLAM_Log/dual_3d_*`。
+- 增量构建仍按包源码 SHA-256 工作。本次首次启动只会重编 `local_depth_cloud_cpp` 与
+  `lidar_py`；Cartographer 稳定参数、STM32 协议、RPP/DWB、车体尺寸和三维滤波参数未修改。

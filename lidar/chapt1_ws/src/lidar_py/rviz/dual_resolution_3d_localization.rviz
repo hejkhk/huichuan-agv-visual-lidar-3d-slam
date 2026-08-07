@@ -43,7 +43,7 @@ Visualization Manager:
       Alpha: 0.30
       Color Scheme: map
       Enabled: true
-      Name: Cartographer 2D Global Map
+      Name: Live Mutable Navigation Map
       Topic:
         Depth: 1
         Durability Policy: Transient Local
@@ -51,6 +51,18 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /map
       Value: true
+    - Class: rviz_default_plugins/Map
+      Alpha: 0.18
+      Color Scheme: map
+      Enabled: false
+      Name: Selected Reference Map (Immutable Audit)
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /localization_reference_map
+      Value: false
     - Class: rviz_default_plugins/LaserScan
       Enabled: true
       Name: Filtered 2D LiDAR

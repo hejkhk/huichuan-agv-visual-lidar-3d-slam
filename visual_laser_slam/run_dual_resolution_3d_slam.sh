@@ -11,6 +11,7 @@ LOG_BASE="$CACHE_WS/log"
 RUN_STAMP="$(date +%Y-%m-%d_%H-%M-%S)"
 RUN_DIR="$ROOT_DIR/SLAM_Log/dual_3d_$RUN_STAMP"
 RUNTIME_LOG="$RUN_DIR/runtime.log"
+LOG_DIR="$RUN_DIR"
 LAUNCH_PID=""
 TAIL_PID=""
 RVIZ_PID=""
@@ -1033,7 +1034,7 @@ fi
 # "Missing ROS package: orbbec_camera" message.
 ensure_orbbec_camera
 
-for pkg in orbbec_camera cartographer_ros laser_filters rtabmap_slam rtabmap_rviz_plugins octomap_server robot_state_publisher xacro rmw_cyclonedds_cpp depth_image_proc rclcpp_components; do
+for pkg in orbbec_camera cartographer_ros laser_filters rtabmap_slam rtabmap_rviz_plugins octomap_server robot_state_publisher xacro rmw_cyclonedds_cpp depth_image_proc rclcpp_components map_msgs; do
   check_pkg "$pkg"
 done
 if is_true "$ENABLE_NAVIGATION"; then
@@ -1188,8 +1189,14 @@ fi
 source "$INSTALL_BASE/setup.bash"
 check_pkg lidar_py
 check_pkg local_depth_cloud_cpp
+RESOURCE_MONITOR_BIN="$(ros2 pkg prefix lidar_py)/lib/lidar_py/system_resource_monitor"
+[ -x "$RESOURCE_MONITOR_BIN" ] || \
+  die "System resource monitor is missing after build: $RESOURCE_MONITOR_BIN"
 if is_true "$LOCALIZATION_MODE"; then
   check_pkg reloc_rviz_panel
+  MUTABLE_MAP_BIN="$(ros2 pkg prefix local_depth_cloud_cpp)/lib/local_depth_cloud_cpp/mutable_navigation_map_node"
+  [ -x "$MUTABLE_MAP_BIN" ] || \
+    die "C++ mutable navigation map is missing after build: $MUTABLE_MAP_BIN"
 fi
 if is_true "$USE_RVIZ" && is_true "$LOCALIZATION_MODE"; then
   rviz_config="$RVIZ_CONFIG_FILE"
@@ -1261,6 +1268,11 @@ fi
 log "  Platform        : $([ "$JETSON_PLATFORM" = true ] && printf 'Jetson' || printf 'generic')"
 log "  RTAB workers    : $RTABMAP_THREADS"
 log "  Runtime log     : $RUNTIME_LOG"
+log "  Resource CSV    : $RUN_DIR/resource_usage.csv (20s grouped CPU/RAM/I/O)"
+if is_true "$LOCALIZATION_MODE"; then
+  log "  Map ownership   : selected PGM -> /localization_reference_map (immutable)"
+  log "                    live confirmed LiDAR evidence -> /map + /map_updates"
+fi
 log "============================================================"
 
 if ! is_true "${CAMERA_EXTRINSIC_CALIBRATED:-false}"; then
@@ -1279,6 +1291,9 @@ cmd=(ros2 launch lidar_py dual_resolution_3d_slam.launch.py
   "nav_autostart:=$NAV_AUTOSTART"
   "localization_mode:=$LOCALIZATION_MODE"
   "localization_map_yaml:=$LOCALIZATION_MAP_YAML"
+  "mutable_map_mark_confirmations:=${MUTABLE_MAP_MARK_CONFIRMATIONS:-3}"
+  "mutable_map_clear_confirmations:=${MUTABLE_MAP_CLEAR_CONFIRMATIONS:-20}"
+  "mutable_map_evidence_rate:=${MUTABLE_MAP_EVIDENCE_RATE:-5.0}"
   "cartographer_load_state_filename:=$LOCALIZATION_PBSTREAM"
   "rviz_config_file:=$RVIZ_CONFIG_FILE"
   "cartographer_config:=$CARTOGRAPHER_CONFIG"
@@ -1346,6 +1361,11 @@ cmd=(ros2 launch lidar_py dual_resolution_3d_slam.launch.py
   "global_3d_voxel:=${GLOBAL_3D_VOXEL:-0.08}"
   "global_3d_range_max:=${GLOBAL_3D_RANGE_MAX:-4.0}"
   "use_octomap:=${USE_OCTOMAP:-true}"
+  "enable_resource_monitor:=${ENABLE_RESOURCE_MONITOR:-true}"
+  "resource_monitor_report_interval:=${RESOURCE_MONITOR_REPORT_INTERVAL:-20.0}"
+  "resource_usage_csv_file:=$RUN_DIR/resource_usage.csv"
+  "resource_monitor_project_root:=$ROOT_DIR"
+  "resource_monitor_run_directory:=$RUN_DIR"
   "local_cloud_topic:=${LOCAL_CLOUD_TOPIC:-/local_highres_cloud_v21}"
   "local_sensor_cloud_topic:=${LOCAL_SENSOR_CLOUD_TOPIC:-/local_highres_cloud_v21/sensor}"
   "local_persistent_sensor_cloud_topic:=${LOCAL_PERSISTENT_SENSOR_CLOUD_TOPIC:-/local_highres_cloud_v21/persistent_sensor}"
@@ -1405,8 +1425,12 @@ wait_topic /odom 20 || die "STM32 odometry /odom did not start"
 wait_topic /imu_cartographer 20 || \
   die "STM32 planar IMU /imu_cartographer did not start"
 if is_true "$LOCALIZATION_MODE"; then
+  wait_transient_topic /localization_reference_map 30 || \
+    die "Static localization reference map did not publish /localization_reference_map"
   wait_transient_topic /map 30 || \
-    die "Static localization map server did not publish /map"
+    die "Mutable navigation map did not publish its initial /map"
+  wait_topic_publisher /map_updates 15 || \
+    die "Mutable navigation map did not advertise /map_updates"
   # In localization mode Cartographer deliberately starts with no active
   # trajectory.  /cartographer_pose_odom is created only after the scan-to-map
   # relocalizer matches the frozen state, so waiting for it here deadlocks the

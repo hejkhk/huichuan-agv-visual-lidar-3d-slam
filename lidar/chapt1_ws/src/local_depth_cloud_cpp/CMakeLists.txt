@@ -13,6 +13,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(map_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -33,6 +35,9 @@ add_executable(local_cloud_collision_gate_node
 )
 add_executable(persistent_visual_wall_filter_node
   src/persistent_visual_wall_filter_node.cpp
+)
+add_executable(mutable_navigation_map_node
+  src/mutable_navigation_map_node.cpp
 )
 
 ament_target_dependencies(depth_image_to_local_cloud_node
@@ -75,11 +80,22 @@ ament_target_dependencies(persistent_visual_wall_filter_node
   sensor_msgs
 )
 
+ament_target_dependencies(mutable_navigation_map_node
+  rclcpp
+  geometry_msgs
+  map_msgs
+  nav_msgs
+  sensor_msgs
+  std_msgs
+  tf2
+  tf2_ros
+)
+
 target_compile_definitions(depth_image_to_local_cloud_node PRIVATE
   $<$<CONFIG:Debug>:LOCAL_DEPTH_CLOUD_DEBUG>
 )
 
-install(TARGETS depth_image_to_local_cloud_node depth_image_to_local_cloud_v21_node rgbd_timestamp_monitor_node local_cloud_collision_gate_node persistent_visual_wall_filter_node
+install(TARGETS depth_image_to_local_cloud_node depth_image_to_local_cloud_v21_node rgbd_timestamp_monitor_node local_cloud_collision_gate_node persistent_visual_wall_filter_node mutable_navigation_map_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

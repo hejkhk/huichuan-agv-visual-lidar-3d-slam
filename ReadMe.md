@@ -1367,9 +1367,11 @@ sudo apt install python3-scipy
 ./START_DUAL_2D_3D_LOCALIZATION.sh floor_1
 ```
 
-启动后保持车辆静止。系统先加载 YAML/PGM 作为 Nav2 静态规划地图，再加载同会话的
-PBSTREAM 作为 Cartographer 冻结地图，使用当前 2D 雷达进行全局扫描匹配。只有匹配得分和
-唯一性检查通过后才激活 Nav2 并解除主机运动锁；失败时车辆保持不动，RViz 面板会显示原因。
+启动后保持车辆静止。系统先把 YAML/PGM 发布到只读的
+`/localization_reference_map`，仅供启动重定位匹配；Nav2 和 RViz 使用的 `/map` 由
+`mutable_navigation_map_node` 独占发布。随后加载同会话的 PBSTREAM 作为 Cartographer
+冻结地图，使用当前 2D 雷达进行全局扫描匹配。只有匹配得分和唯一性检查通过后才激活
+Nav2 并解除主机运动锁；失败时车辆保持不动，RViz 面板会显示原因。
 
 `Verified Relocalization` 面板只存在于这个启动版本。运行中需要重新定位时，先停车再点
 `Relocalize`；Nav2 会暂停，成功后恢复。系统不会在正常行驶中自行触发重定位或重启轨迹。
@@ -1377,3 +1379,34 @@ PBSTREAM 作为 Cartographer 冻结地图，使用当前 2D 雷达进行全局�
 定位完成后，冻结 PBSTREAM 提供历史地图约束，新活动轨迹继续融合 `/odom`、
 `/imu_cartographer` 和 2D 雷达，并保留当前 Cartographer 回环优化。现有 Gemini2 实时点云、
 STVL、长期视觉墙、最终碰撞门和底盘安全链路均继续运行。
+
+### 重定位模式的实时二维地图
+
+```text
+Loc_MAP/*.yaml + *.pgm
+          -> /localization_reference_map（不可变，只用于重定位）
+          -> mutable_navigation_map_node + /scan_timed_v2_filtered
+          -> /map（完整地图，30 秒保底重发）+ /map_updates（最高 2 Hz 增量）
+          -> Nav2 local/global StaticLayer + RViz
+```
+
+- 新障碍必须在不同雷达帧中连续确认 `3` 次才写入，单帧散点不会污染导航地图。
+- 旧地图中的占用格必须被自由射线确认 `20` 次才清除。证据按最高 `5 Hz` 计数，正常约
+  `4 秒`，比动态 STVL 慢，避免一次漏扫把真实墙体擦掉。
+- 每帧对同一栅格最多计数一次；射线在回波前 `12 cm` 停止，因此不会把当前扫到的墙面
+  当成自由空间。
+- 未知区域不会被自由射线自动改成可通行区域；当前地图尺寸也不会越过所选 PGM 边界扩张。
+- `/localization_ready=false`、时间戳 TF 缺失、相邻扫描位姿跳变超过 `0.35 m/20 deg`
+  时停止更新。发生位姿跳变会恢复只读参考图并冻结两秒，避免错误定位污染导航地图。
+- 重定位 RViz 默认显示 `Live Mutable Navigation Map`；需要对比原图时手动勾选
+  `Selected Reference Map (Immutable Audit)`。
+
+### 性能与占用日志
+
+每次启动都会在当前 `SLAM_Log/dual_3d_*/` 生成 `resource_usage.csv`。监控节点每 `2 秒`
+读取一次 `/proc`，每 `20 秒`在 `runtime.log` 输出 `RESOURCE_SYSTEM` 和按模块拆分的
+`RESOURCE_GROUP`：相机、Cartographer、RTAB-Map/OctoMap、Nav2、3D 感知、底盘/雷达、
+RViz、网页桥接及其他启动进程。CSV 包含 CPU、RSS 内存、线程数、磁盘读写速率、系统负载、
+可用内存、Jetson 温度、磁盘余量和本次日志目录大小。出现 CPU 大于 `90%`、可用内存小于
+`512 MB` 或温度达到 `80 C` 时会额外输出 `RESOURCE_PRESSURE`，后续应先依据最高占用模块
+优化，不能直接猜测并降低建图参数。
