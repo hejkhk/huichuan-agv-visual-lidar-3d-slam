@@ -20,5 +20,8 @@ POSE_GRAPH.constraint_builder.fast_correlative_scan_matcher.angular_search_windo
 -- constraint distance, sampling ratio and submap density stay exactly V9.
 TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 POSE_GRAPH.max_num_final_iterations = 300
+-- Jetson's Humble Ceres build exposes six worker threads. The inherited value
+-- of seven is clamped on every optimization and only produces warning spam.
+POSE_GRAPH.optimization_problem.ceres_solver_options.num_threads = 6
 
 return options

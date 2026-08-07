@@ -72,5 +72,6 @@ POSE_GRAPH.constraint_builder.fast_correlative_scan_matcher.linear_search_window
 POSE_GRAPH.constraint_builder.fast_correlative_scan_matcher.angular_search_window = math.rad(3.0)
 TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 POSE_GRAPH.max_num_final_iterations = 300
+POSE_GRAPH.optimization_problem.ceres_solver_options.num_threads = 6
 
 return options

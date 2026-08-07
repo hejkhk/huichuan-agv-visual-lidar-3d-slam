@@ -157,6 +157,11 @@ def main(args=None) -> None:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except Exception:
+        # A shared launch context can be invalidated between spin iterations
+        # during a normal SIGINT shutdown on Humble.
+        if rclpy.ok():
+            raise
     finally:
         if rclpy.ok():
             node.hold_pub.publish(Bool(data=False))

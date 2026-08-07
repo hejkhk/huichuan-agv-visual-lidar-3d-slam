@@ -77,7 +77,7 @@ fi
 
 declare -a BASELINE_HASHES=(
   "00dfd1c721f0fe8c61ac6f2b417001920694e4fc77e895fb4a1f194330c910d9:$LIDAR_SRC/config/cartographer_2d_v9_tightened.lua"
-  "0571d9810aa44b32ecb7e283fcf035f83089de824ce2ec2a6530a6cdcbb26c4f:$LIDAR_SRC/launch/cartographer_scan_v2_launch.py"
+  "20506a9609532576244d2fe7a8e0be9bd5a66396dad4f1605348667949ba6f77:$LIDAR_SRC/launch/cartographer_scan_v2_launch.py"
   "8583a2ca7e99a29b13f2fc339df468e621562d61f0adfa1e7e1828254705b306:$LIDAR_SRC/config/laser_filter.yaml"
 )
 for baseline in "${BASELINE_HASHES[@]}"; do
@@ -266,7 +266,11 @@ for required in (
     "nav2_dual_3d_dwb_humble_override.yaml",
     '"camera_time_domain", default_value="global"',
     '"rgbd_sync_max_interval", default_value="0.045"',
+    '"rgbd_sync_warn_p95_ms", default_value="45.0"',
     '"max_input_age_ms": 250.0',
+    '"age_warn_ms": 220.0',
+    '"stall_warn_gap_ms": 150.0',
+    '"fixed_scan_min_raw_points", default_value="180"',
     "cartographer_scan_v2_localization_launch.py",
     "localization_map_server",
     "mutable_navigation_map_node",
@@ -322,7 +326,7 @@ guard = (root / "lidar_py" / "slam_correction_guard.py").read_text(
 for required in (
         'lookup_transform(', 'self.map_frame,', 'self.odom_frame,',
         '"/slam_correction_hold"', "SLAM_CORRECTION_HOLD",
-        "SlamCorrectionDetector"):
+        "SlamCorrectionDetector", "except Exception:", "if rclpy.ok():"):
     if required not in guard:
         raise SystemExit(f"SLAM correction guard contract missing: {required}")
 
@@ -386,6 +390,13 @@ for required in (
         raise SystemExit(
             f"localization bringup lost the in-process motion gate: {required}")
 runner = (root.parents[3] / "visual_laser_slam" / "run_dual_resolution_3d_slam.sh").read_text(encoding="utf-8")
+for required in (
+        'fixed_scan_min_raw_points:=${FIXED_SCAN_MIN_RAW_POINTS:-180}',
+        'fixed_scan_min_valid_points:=${FIXED_SCAN_MIN_VALID_POINTS:-0}',
+        'RGBD_SYNC_WARN_P95_MS:-45.0'):
+    if required not in runner:
+        raise SystemExit(
+            f"Jetson launcher lost its measured LiDAR/RGB-D threshold: {required}")
 if "while ! wait_boolean_true /localization_ready 150" not in runner:
     raise SystemExit("localization launcher must wait for the verified localization gate")
 if "Automatic match is still unverified" not in runner:

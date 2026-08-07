@@ -40,7 +40,7 @@ class FixedScanGridBuilder:
             bins: int = 360,
             angle_sign: float = -1.0,
             angle_offset_deg: float = 0.0,
-            min_raw_points: int = 300,
+            min_raw_points: int = 180,
             max_raw_points: int = 720,
             min_valid_points: int = 0,
             min_scan_time: float = 0.10,

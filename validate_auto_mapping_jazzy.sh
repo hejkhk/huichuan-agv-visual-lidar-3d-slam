@@ -600,7 +600,7 @@ pass "RPP/Smac/STVL YAML, BT.CPP v4, staged startup and Python syntax are valid"
 
 declare -A EXPECTED_HASHES=(
     ["$LIDAR_SRC/config/cartographer_2d_v9_tightened.lua"]="00dfd1c721f0fe8c61ac6f2b417001920694e4fc77e895fb4a1f194330c910d9"
-    ["$LIDAR_SRC/launch/cartographer_scan_v2_launch.py"]="0571d9810aa44b32ecb7e283fcf035f83089de824ce2ec2a6530a6cdcbb26c4f"
+    ["$LIDAR_SRC/launch/cartographer_scan_v2_launch.py"]="20506a9609532576244d2fe7a8e0be9bd5a66396dad4f1605348667949ba6f77"
     ["$LIDAR_SRC/config/laser_filter.yaml"]="8583a2ca7e99a29b13f2fc339df468e621562d61f0adfa1e7e1828254705b306"
 )
 for file in "${!EXPECTED_HASHES[@]}"; do

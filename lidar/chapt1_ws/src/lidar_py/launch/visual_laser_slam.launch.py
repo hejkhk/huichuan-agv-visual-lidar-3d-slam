@@ -614,7 +614,7 @@ def _setup(context):
                     "publish_fixed_timed_scan": True,
                     "fixed_timed_scan_topic": cartographer_scan_topic,
                     "fixed_scan_bins": 360,
-                    "fixed_scan_min_raw_points": 300,
+                    "fixed_scan_min_raw_points": 180,
                     "fixed_scan_max_raw_points": 720,
                     "fixed_scan_min_valid_points": 180,
                     "fixed_scan_min_time_sec": 0.10,

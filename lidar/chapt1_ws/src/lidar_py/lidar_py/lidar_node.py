@@ -116,9 +116,11 @@ class LidarNode(Node):
         self.declare_parameter('publish_fixed_timed_scan', False)
         self.declare_parameter('fixed_timed_scan_topic', '/scan_timed_v2')
         self.declare_parameter('fixed_scan_bins', 360)
-        self.declare_parameter('fixed_scan_min_raw_points', 300)
-        # The LD14P point count rises as motor speed falls. The real unit can
-        # produce about 630 rays over a valid 0.27 s revolution.
+        # The real LD14P has been observed from about 8.1 Hz / 288 rays to
+        # about 3.7 Hz / 630 rays. Angular wrap and scan duration still prove
+        # that this is a complete revolution; 300 incorrectly rejects the
+        # faster, otherwise healthy operating point.
+        self.declare_parameter('fixed_scan_min_raw_points', 180)
         self.declare_parameter('fixed_scan_max_raw_points', 720)
         self.declare_parameter('fixed_scan_min_valid_points', 0)
         self.declare_parameter('fixed_scan_min_time_sec', 0.10)
@@ -193,6 +195,8 @@ class LidarNode(Node):
                     self.get_parameter('fixed_scan_max_time_sec').value),
             )
         self.fixed_scan_last_drop_count = 0
+        self.fixed_scan_last_drop_log_time = 0.0
+        self.fixed_scan_last_reported_drop_count = 0
 
         # ===== Internal state =====
         self.buffer = bytearray()
@@ -546,10 +550,20 @@ class LidarNode(Node):
                       > self.fixed_scan_last_drop_count):
                     self.fixed_scan_last_drop_count = (
                         self.fixed_scan_builder.dropped_count)
-                    self.get_logger().warn(
-                        "Dropped malformed fixed-grid revolution: "
-                        f"{self.fixed_scan_builder.last_drop_reason}"
-                    )
+                    now_monotonic = time.monotonic()
+                    if now_monotonic - self.fixed_scan_last_drop_log_time >= 2.0:
+                        new_drops = (
+                            self.fixed_scan_builder.dropped_count -
+                            self.fixed_scan_last_reported_drop_count
+                        )
+                        self.get_logger().warn(
+                            "Dropped malformed fixed-grid revolution: "
+                            f"{self.fixed_scan_builder.last_drop_reason}; "
+                            f"drops_since_report={new_drops}"
+                        )
+                        self.fixed_scan_last_drop_log_time = now_monotonic
+                        self.fixed_scan_last_reported_drop_count = (
+                            self.fixed_scan_builder.dropped_count)
 
         self.prev_start_angle = start_angle
 

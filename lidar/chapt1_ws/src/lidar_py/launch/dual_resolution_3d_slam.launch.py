@@ -116,6 +116,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "require_depth_baseline_for_ps2", default_value="true"),
         DeclareLaunchArgument("enable_fixed_scan_filter", default_value="true"),
+        DeclareLaunchArgument("fixed_scan_min_raw_points", default_value="180"),
+        DeclareLaunchArgument("fixed_scan_min_valid_points", default_value="0"),
         DeclareLaunchArgument("filtered_scan_topic", default_value="/scan_timed_v2_filtered"),
         DeclareLaunchArgument("rtabmap_scan_topic", default_value="/scan_timed_v2"),
 
@@ -135,7 +137,7 @@ def generate_launch_description():
         DeclareLaunchArgument("camera_frame_timestamp_csv_file", default_value=""),
         DeclareLaunchArgument("rgbd_sync_max_interval", default_value="0.045"),
         DeclareLaunchArgument("rgbd_sync_max_interval_ms", default_value="45.0"),
-        DeclareLaunchArgument("rgbd_sync_warn_p95_ms", default_value="35.0"),
+        DeclareLaunchArgument("rgbd_sync_warn_p95_ms", default_value="45.0"),
         DeclareLaunchArgument("camera_x", default_value="0.30"),
         DeclareLaunchArgument("camera_y", default_value="0.0"),
         DeclareLaunchArgument("camera_z", default_value="0.40"),
@@ -240,6 +242,10 @@ def generate_launch_description():
             "cartographer_odom_topic": LaunchConfiguration(
                 "cartographer_odom_topic"),
             "enable_fixed_scan_filter": LaunchConfiguration("enable_fixed_scan_filter"),
+            "fixed_scan_min_raw_points": LaunchConfiguration(
+                "fixed_scan_min_raw_points"),
+            "fixed_scan_min_valid_points": LaunchConfiguration(
+                "fixed_scan_min_valid_points"),
             "filtered_scan_topic": LaunchConfiguration("filtered_scan_topic"),
             "cartographer_config": LaunchConfiguration(
                 "cartographer_config"),
@@ -528,8 +534,8 @@ def generate_launch_description():
             "stats_period_sec": 1.0,
             "stats_window_size": 300,
             "process_warn_ms": 50.0,
-            "age_warn_ms": 120.0,
-            "stall_warn_gap_ms": 120.0,
+            "age_warn_ms": 220.0,
+            "stall_warn_gap_ms": 150.0,
         }],
     )
 

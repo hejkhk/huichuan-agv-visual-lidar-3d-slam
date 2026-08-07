@@ -36,6 +36,8 @@ def generate_launch_description():
     cartographer_config = LaunchConfiguration("cartographer_config")
     cartographer_scan_topic = LaunchConfiguration("cartographer_scan_topic")
     fixed_scan_bins = LaunchConfiguration("fixed_scan_bins")
+    fixed_scan_min_raw_points = LaunchConfiguration(
+        "fixed_scan_min_raw_points")
     fixed_scan_min_valid_points = LaunchConfiguration(
         "fixed_scan_min_valid_points")
     lidar_clock_max_adjustment_ns = LaunchConfiguration(
@@ -101,7 +103,8 @@ def generate_launch_description():
             "publish_fixed_timed_scan": True,
             "fixed_timed_scan_topic": cartographer_scan_topic,
             "fixed_scan_bins": ParameterValue(fixed_scan_bins, value_type=int),
-            "fixed_scan_min_raw_points": 300,
+            "fixed_scan_min_raw_points": ParameterValue(
+                fixed_scan_min_raw_points, value_type=int),
             "fixed_scan_max_raw_points": 720,
             "fixed_scan_min_valid_points": ParameterValue(
                 fixed_scan_min_valid_points, value_type=int),
@@ -284,6 +287,13 @@ def generate_launch_description():
             "fixed_scan_bins",
             default_value="360",
             description="Constant angular bins for the measured-angle scan",
+        ),
+        DeclareLaunchArgument(
+            "fixed_scan_min_raw_points", default_value="180",
+            description=(
+                "Accept complete LD14P turns across the measured 3.7-8.1 Hz "
+                "motor-speed range"
+            ),
         ),
         DeclareLaunchArgument(
             "fixed_scan_min_valid_points", default_value="0",

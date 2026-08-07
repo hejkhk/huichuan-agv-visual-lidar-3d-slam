@@ -4300,3 +4300,21 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
   `orbbec_frame_timestamp.csv` 和资源 CSV 都固定进入当前 `SLAM_Log/dual_3d_*`。
 - 增量构建仍按包源码 SHA-256 工作。本次首次启动只会重编 `local_depth_cloud_cpp` 与
   `lidar_py`；Cartographer 稳定参数、STM32 协议、RPP/DWB、车体尺寸和三维滤波参数未修改。
+
+## 2026-08-07 Jetson 雷达断流与点云假卡顿修复
+
+- 对照 `dual_3d_2026-08-07_20-26-28` 和 `20-28-24`，确认 LD14P 当前转速约
+  `8.1 Hz`，每个完整回绕稳定为 `285~298` 条原始射线；旧的 `>=300` 门控误删了
+  417 个完整扫描，导致 Cartographer 无 `/scan`、无 `map` TF，RViz 因而只显示 RGB 和 URDF。
+- 固定扫描最低原始点数改为 `180`，继续保留角度回绕、`0.10~0.35 s` 完整圈时长、
+  360 固定角度栅格和可选有效点门控；实测 `288 点 / 0.123 s` 与原来的
+  `630 点 / 0.27 s` 均有回归测试，不修改 Cartographer 扫描匹配和回环权重。
+- 连续扫描恢复后，不再让孤立扫描在 Cartographer 中等待到 TF 缓存过期。第二次日志中的
+  1472 条 `extrapolation into the past` 和 17 条 `Queue waiting for data` 属于该断流的连锁反应。
+- Gemini2 CSV 显示一分钟内 RGB/Depth 仍约 15 Hz，最长帧间隔仅约 131 ms；本地点云保持
+  `14.9 Hz`，并非相机数秒断流。Jetson 正常点云帧龄约 172 ms，因此警告门限由 120 ms
+  调为 220 ms，真实输入超过 250 ms 仍会被拒绝；输出断流警告门限调为 150 ms。
+- RGB-D 固定相位差约 42 ms，仍在 45 ms 配对上限内；P95 告警改为 45 ms，避免每秒误报。
+  Ceres 线程数显式设为 Jetson Humble 实际支持的 6，异常雷达整圈日志按 2 秒聚合。
+- `slam_correction_guard` 兼容 Humble 在正常 SIGINT 时先销毁共享 ROS context 的顺序，
+  Ctrl+C 不再将正常停止误报为 `process has died`。
