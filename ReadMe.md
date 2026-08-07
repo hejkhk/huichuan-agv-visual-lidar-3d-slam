@@ -1239,6 +1239,26 @@ LIDAR_PORT=/dev/ttyUSB1 CHASSIS_PORT=/dev/ttyUSB0 ./open_all.sh
 
 不要让两个节点同时打开同一个串口。
 
+### STM32 串口出现 `Errno 5: Input/output error`
+
+这表示 Linux 内核无法正常打开 USB 串口，故障发生在 ROS、Cartographer、重定位和
+Nav2 启动之前。统一启动器会先探测 STM32，并在失败时记录 USB VID/PID、驱动、
+`/dev/serial/by-id`、占用进程以及 `brltty`/`ModemManager` 状态；探测不通过时不会继续
+启动一个缺少 `/odom` 和 IMU 的导航系统。
+
+先重新插拔 STM32 USB 线并确认下位机已启动，再执行：
+
+```bash
+sudo fuser -v /dev/ttyUSB0
+udevadm info --query=property --name=/dev/ttyUSB0
+sudo dmesg -T | grep -Ei 'ttyUSB|ch34|usb|brltty' | tail -n 80
+pgrep -af 'brltty|ModemManager'
+```
+
+若 `fuser` 显示旧的 `chassis_node`，先结束旧的一键启动进程；若内核日志显示 CH340
+反复断连、重置或 `brltty` 抢占，则检查 USB 线、供电、CH340 驱动和对应系统服务。
+仅执行 `chmod` 不能修复 `Errno 5`。
+
 ## 双分辨率3D导航配置
 
 安装 Humble 的 RTAB-Map、robot_localization、Nav2 DWB 和 C++ STVL：

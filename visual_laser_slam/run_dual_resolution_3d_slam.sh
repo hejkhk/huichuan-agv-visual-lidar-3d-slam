@@ -459,6 +459,98 @@ auto_detect_ports() {
   fi
 }
 
+serial_device_report() {
+  local role="$1" port="$2" props="" vendor="" product="" model=""
+  local serial_number="" driver="" by_id="" link="" resolved="" holders=""
+  props="$(udevadm info --query=property --name="$port" 2>/dev/null || true)"
+  vendor="$(printf '%s\n' "$props" | sed -n 's/^ID_VENDOR_ID=//p' | head -n 1)"
+  product="$(printf '%s\n' "$props" | sed -n 's/^ID_MODEL_ID=//p' | head -n 1)"
+  model="$(printf '%s\n' "$props" | sed -n 's/^ID_MODEL=//p' | head -n 1)"
+  serial_number="$(
+    printf '%s\n' "$props" | sed -n 's/^ID_SERIAL_SHORT=//p' | head -n 1
+  )"
+  driver="$(
+    basename "$(readlink -f "/sys/class/tty/${port##*/}/device/driver" \
+      2>/dev/null || true)" 2>/dev/null || true
+  )"
+  resolved="$(readlink -f "$port" 2>/dev/null || printf '%s' "$port")"
+  for link in /dev/serial/by-id/*; do
+    [ -e "$link" ] || continue
+    if [ "$(readlink -f "$link" 2>/dev/null || true)" = "$resolved" ]; then
+      by_id="$link"
+      break
+    fi
+  done
+  if command -v fuser >/dev/null 2>&1; then
+    holders="$(fuser "$port" 2>/dev/null | xargs 2>/dev/null || true)"
+  fi
+  log "[serial] $role device=$port usb=${vendor:-unknown}:${product:-unknown} model=${model:-unknown} driver=${driver:-unknown} by-id=${by_id:-none} holders=${holders:-none} serial=${serial_number:-none}"
+}
+
+probe_chassis_serial() {
+  local attempt="" output="" holders="" process_name=""
+  serial_device_report "STM32" "$CHASSIS_PORT"
+  serial_device_report "LiDAR" "$LIDAR_PORT"
+
+  if command -v fuser >/dev/null 2>&1; then
+    holders="$(fuser "$CHASSIS_PORT" 2>/dev/null | xargs 2>/dev/null || true)"
+  fi
+  if [ -n "$holders" ]; then
+    for holder in $holders; do
+      log "[serial] STM32 holder pid=$holder cmd=$(
+        process_cmdline "$holder" 2>/dev/null || printf unknown
+      )"
+    done
+    die "STM32 serial port $CHASSIS_PORT is already open by PID(s): $holders"
+  fi
+
+  for attempt in 1 2 3; do
+    if output="$(python3 - "$CHASSIS_PORT" 115200 <<'PY'
+import serial
+import sys
+
+port = sys.argv[1]
+baudrate = int(sys.argv[2])
+connection = None
+try:
+    connection = serial.Serial(
+        port=port,
+        baudrate=baudrate,
+        timeout=0.10,
+        write_timeout=0.10,
+        xonxoff=False,
+        rtscts=False,
+        dsrdtr=False,
+        exclusive=True,
+    )
+    connection.reset_input_buffer()
+    connection.reset_output_buffer()
+    print("open/reset succeeded")
+except Exception as exc:
+    print(f"{type(exc).__name__}: {exc}")
+    raise SystemExit(1)
+finally:
+    if connection is not None:
+        connection.close()
+PY
+    )"; then
+      log "[serial] STM32 preflight passed on $CHASSIS_PORT: $output"
+      sleep 0.2
+      return 0
+    fi
+    log "[serial] STM32 preflight attempt $attempt/3 failed: $output"
+    sleep 1
+  done
+
+  for process_name in brltty ModemManager; do
+    if pgrep -x "$process_name" >/dev/null 2>&1; then
+      log "[serial] Interference candidate is active: $process_name"
+    fi
+  done
+  log "[serial] Kernel check: sudo dmesg -T | grep -Ei 'ttyUSB|ch34|usb|brltty' | tail -n 80"
+  die "STM32 serial preflight failed on $CHASSIS_PORT: $output. This is a USB/driver/device-open failure, before ROS, Cartographer or Nav2 starts."
+}
+
 wait_topic() {
   local topic="$1" timeout_sec="${2:-45}"
   kill -0 "$LAUNCH_PID" 2>/dev/null || return 1
@@ -1131,6 +1223,7 @@ for port in "$CHASSIS_PORT" "$LIDAR_PORT"; do
     sudo chmod a+rw "$port" || die "Cannot access $port"
   fi
 done
+probe_chassis_serial
 
 # Do not silently steal the camera, serial ports or TF tree from another stack.
 if ros2 node list 2>/dev/null | grep -Eq '/(cartographer_node|chassis_node|rtabmap_3d/rtabmap|depth_image_to_local_cloud_v21)$'; then

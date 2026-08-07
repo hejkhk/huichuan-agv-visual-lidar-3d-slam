@@ -299,7 +299,12 @@ class ChassisNode(Node):
         self.serial_reconnect_interval_sec = 1.0
         self.serial_next_reconnect_monotonic = 0.0
         self.serial_disconnect_count = 0
-        self._connect_serial()
+        # The launcher already performs a fail-fast hardware probe. Keep node
+        # construction short so SIGINT cannot land inside a ten-attempt loop
+        # before this node has created its publishers and timers.
+        self._connect_serial(attempts=1)
+        if not rclpy.ok():
+            raise ExternalShutdownException()
 
         # ===== 里程计累计位姿 =====
         self.odom_x = 0.0
@@ -591,6 +596,8 @@ class ChassisNode(Node):
 
     def _connect_serial(self, attempts=10):
         for attempt in range(attempts):
+            if not rclpy.ok():
+                return False
             try:
                 self.ser = serial.Serial(
                     self.serial_port, self.baudrate, timeout=0.05)
@@ -601,8 +608,10 @@ class ChassisNode(Node):
                     frame = self._make_ctrl_frame(CTRL_CMD_ECHO_ON, [0, 0, 0, 0])
                     self.ser.write(frame)
                     self.last_tx_line = self._format_tx_frame(frame, [0, 0, 0, 0])
-                return
+                return True
             except (serial.SerialException, OSError) as e:
+                if not rclpy.ok():
+                    return False
                 self.get_logger().warn(
                     f"串口打开失败 ({attempt+1}/{attempts}): {e}")
                 if attempt + 1 < attempts:
@@ -610,6 +619,7 @@ class ChassisNode(Node):
         self.get_logger().error(
             f"无法打开串口 {self.serial_port}，节点将以无数据模式运行")
         self.ser = None
+        return False
 
     # ==================== 上行帧解析 ====================
 
@@ -633,6 +643,8 @@ class ChassisNode(Node):
             time.monotonic() + self.serial_reconnect_interval_sec)
 
     def _reconnect_serial_if_due(self):
+        if not rclpy.ok():
+            return
         now = time.monotonic()
         if now < self.serial_next_reconnect_monotonic:
             return
@@ -645,6 +657,8 @@ class ChassisNode(Node):
                 f"{self.serial_disconnect_count} disconnect(s)")
 
     def read_serial(self):
+        if not rclpy.ok():
+            return
         if (not hasattr(self, 'ser') or self.ser is None
                 or not self.ser.is_open):
             self._reconnect_serial_if_due()
@@ -2286,9 +2300,10 @@ class ChassisNode(Node):
 
 
 def main(args=None):
-    rclpy.init(args=args)
-    node = ChassisNode()
+    node = None
     try:
+        rclpy.init(args=args)
+        node = ChassisNode()
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
@@ -2296,7 +2311,8 @@ def main(args=None):
         if rclpy.ok():
             raise
     finally:
-        node.destroy_node()
+        if node is not None:
+            node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
 
