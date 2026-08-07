@@ -75,3 +75,16 @@ def test_clock_mapper_ignores_late_usb_packet():
 
     assert delayed > first
     assert mapper.total_adjustment_ns == 0
+
+
+def test_clock_mapper_clamps_serial_backlog_to_host_receipt_time():
+    mapper = MonotonicMinimumDelayMapper(max_adjustment_ns=100_000)
+    wire_ns = 4_100_000
+
+    first = mapper.map_ms(1000, 2_004_100_000, wire_ns)
+    # Simulate parsing a large buffered device-time jump almost immediately.
+    backlog_receipt_ns = 2_014_100_000
+    backlog = mapper.map_ms(1400, backlog_receipt_ns, wire_ns)
+
+    assert backlog > first
+    assert backlog <= backlog_receipt_ns - wire_ns

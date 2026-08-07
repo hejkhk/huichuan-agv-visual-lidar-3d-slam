@@ -1,0 +1,49 @@
+<!-- all.beifen multi-goal tree ported to BehaviorTree.CPP 3 / Nav2 Humble. -->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RecoveryStatus stage="tracking" reason="all_beifen_multi_goal"/>
+        <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
+        <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
+        <RateController hz="0.333">
+          <RecoveryNode number_of_retries="1" name="ComputePathThroughPoses">
+            <ReactiveSequence>
+              <RemovePassedGoals input_goals="{goals}" output_goals="{goals}" radius="0.70"/>
+              <ComputePathThroughPoses goals="{goals}" path="{path}" planner_id="{selected_planner}"/>
+            </ReactiveSequence>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="{selected_controller}"/>
+          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Sequence name="ClearingActions">
+            <RecoveryStatus stage="level1" reason="all_beifen_multi_clear"/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+          <Sequence name="TurnAndRetry">
+            <RecoveryStatus stage="level2" reason="all_beifen_multi_turn"/>
+            <SpinSafetyCheck safety_radius="0.51"
+                             lethal_cost="254"
+                             block_unknown="true"
+                             robot_base_frame="base_link"
+                             costmap_wait_timeout="1.0"/>
+            <Spin spin_dist="1.57"/>
+          </Sequence>
+          <Sequence name="WaitAndRetry">
+            <RecoveryStatus stage="level3" reason="all_beifen_multi_wait"/>
+            <Wait wait_duration="5.0"/>
+          </Sequence>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

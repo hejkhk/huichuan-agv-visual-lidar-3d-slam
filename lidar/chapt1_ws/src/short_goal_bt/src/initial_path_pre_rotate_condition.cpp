@@ -183,7 +183,13 @@ BT::NodeStatus InitialPathPreRotateCondition::tick()
   if (goal_distance >= min_short_distance && goal_distance <= max_short_distance &&
     std::abs(goal_error) >= min_short_bearing)
   {
-    setOutput("spin_dist", goal_error);
+    const auto output_result = setOutput("spin_dist", goal_error);
+    if (!output_result) {
+      RCLCPP_ERROR(
+        node_->get_logger(), "InitialPathPreRotate could not publish spin angle: %s",
+        output_result.error().c_str());
+      return BT::NodeStatus::FAILURE;
+    }
     RCLCPP_INFO(
       node_->get_logger(),
       "Initial short rear goal: distance %.2f m, bearing %.1f deg; pre-rotating once",
@@ -217,7 +223,13 @@ BT::NodeStatus InitialPathPreRotateCondition::tick()
     return BT::NodeStatus::FAILURE;
   }
 
-  setOutput("spin_dist", path_error);
+  const auto output_result = setOutput("spin_dist", path_error);
+  if (!output_result) {
+    RCLCPP_ERROR(
+      node_->get_logger(), "InitialPathPreRotate could not publish spin angle: %s",
+      output_result.error().c_str());
+    return BT::NodeStatus::FAILURE;
+  }
   RCLCPP_INFO(
     node_->get_logger(),
     "Initial long path: length %.2f m, circle %.3f m, bearing %.1f deg; pre-rotating once",

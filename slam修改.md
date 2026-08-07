@@ -4318,3 +4318,27 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
   Ceres 线程数显式设为 Jetson Humble 实际支持的 6，异常雷达整圈日志按 2 秒聚合。
 - `slam_correction_guard` 兼容 Humble 在正常 SIGINT 时先销毁共享 ROS context 的顺序，
   Ctrl+C 不再将正常停止误报为 `process has died`。
+
+## 2026-08-07 all.beifen 导航测试版与重定位时间线修复
+
+- 对照 `dual_3d_2026-08-07_20-59-04`，四个导航目标中三个成功；失败目标期间
+  `slam_correction_guard` 在约 109 秒内产生 130 次停车、仅 22 次释放。旧的
+  `0.5 deg` 门槛把 Cartographer 正常的 `0.5-1.2 deg` 扫描匹配细化误判成回环跳变。
+  门槛改为瞬时 `0.20 m/5 deg`、0.5 秒累计 `0.30 m/6 deg`、保持 `1.0 s`，只拦截真实突变。
+- 正式测试入口改用独立 `nav2_all_beifen_humble_override.yaml`：NavFn A*、20 Hz
+  RotationShim+DWB、NoShim DWB、二档 `0.20 m/s`、30 秒进度窗口和 all.beifen 恢复树。
+  本工程原有 2D/3D STVL、`0.10 m` 软膨胀、完整车体 footprint、视觉墙、C++ 碰撞门、
+  `/cmd_vel_safe` 与底盘仲裁全部保留；旧 RPP/DWB 文件保留用于明确回退。
+- Humble 原生 `Spin` 只在行为树节点构造时读取 `spin_dist`。日志中预旋转条件算出
+  `172 deg`，Behavior Server 却收到 `0.00`。新增 `DynamicSpin`，在每次 tick 时读取
+  黑板角度并校验，后方目标和长路径预对向不再执行零角度假旋转。
+- 对照 `dual_3d_2026-08-07_21-27-25`，所选只读参考图一直独立发布在
+  `/localization_reference_map`，实时双地图没有参与重定位打分。错误定位来自单帧候选
+  `0.805/0.784`、仅 `0.021` 的歧义差仍被旧强匹配门放行。现在使用 180 个扫描点，要求
+  最低 `0.035` 唯一性差；高分旁路提高到 `0.90`，歧义走廊宁可保持锁车并重试也不猜位置。
+- 手动重定位结束轨迹后，Cartographer 因雷达未来时间戳与较旧 IMU 交错而报
+  `Non-sorted data` 并退出，旧逻辑随后又把冻结 TF 误报为成功。LD14P 时钟映射现在禁止
+  时间戳超过串口接收时刻；轨迹重启增加排空等待，并且必须同时验证 Cartographer 服务、
+  ACTIVE 轨迹、TF 新鲜度和 TF 持续前进后才发布 `/localization_ready=true`。
+- `mutable_navigation_map_node` 的 TF 等待提高到 `0.50 s`，用于吸收 Jetson 正常调度延迟；
+  Cartographer 退出或 TF 冻结时仍停止地图更新和 Nav2，不会用错误位姿改写 `/map`。

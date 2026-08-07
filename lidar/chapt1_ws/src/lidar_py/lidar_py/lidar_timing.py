@@ -96,6 +96,12 @@ class MonotonicMinimumDelayMapper:
             self.total_adjustment_ns += adjustment
 
         mapped_ns = self.offset_ns + device_ns
+        # A Python/USB scheduling stall can leave many old packets buffered.
+        # Their device counter advances while the parser drains the backlog
+        # much faster than real time. Never let that temporary backlog create
+        # ROS stamps in the future; the fixed-scan builder will reject the
+        # compressed revolution and resume on the next physical turn.
+        mapped_ns = min(mapped_ns, int(receipt_ns) - int(wire_ns))
         if self.last_mapped_ns is not None and mapped_ns <= self.last_mapped_ns:
             mapped_ns = self.last_mapped_ns + 1
         self.last_mapped_ns = mapped_ns

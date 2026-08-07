@@ -18,6 +18,7 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 
 add_library(short_goal_behind_bt_node SHARED
+  src/dynamic_spin_action.cpp
   src/short_goal_behind_condition.cpp
   src/initial_path_pre_rotate_condition.cpp
   src/reverse_escape_monitor.cpp

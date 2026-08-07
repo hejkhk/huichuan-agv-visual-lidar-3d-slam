@@ -1,3 +1,4 @@
+#include "short_goal_bt/dynamic_spin_action.hpp"
 #include "short_goal_bt/short_goal_behind_condition.hpp"
 #include "short_goal_bt/initial_path_pre_rotate_condition.hpp"
 #include "short_goal_bt/reverse_escape_monitor.hpp"
@@ -92,6 +93,7 @@ BT::NodeStatus ShortGoalBehindCondition::tick()
 
 BT_REGISTER_NODES(factory)
 {
+  factory.registerNodeType<short_goal_bt::DynamicSpinAction>("DynamicSpin");
   factory.registerNodeType<short_goal_bt::ShortGoalBehindCondition>("ShortGoalBehind");
   factory.registerNodeType<short_goal_bt::InitialPathPreRotateCondition>("InitialPathPreRotate");
   factory.registerNodeType<short_goal_bt::SpinSafetyCondition>("SpinSafetyCheck");

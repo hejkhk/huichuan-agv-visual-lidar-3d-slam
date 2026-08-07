@@ -789,7 +789,7 @@ wait_parameter_value() {
 
 verify_navigation_source_contract() {
   local controller_override
-  controller_override="$SOURCE_WS/src/lidar_py/config/nav2_dual_3d_dwb_humble_override.yaml"
+  controller_override="$SOURCE_WS/src/lidar_py/config/nav2_all_beifen_humble_override.yaml"
   python3 - "$NAV_COSTMAP_OVERRIDE" "$controller_override" "$ENABLE_STVL" <<'PY'
 import pathlib
 import sys
@@ -862,34 +862,65 @@ try:
         "FollowPath"]
     planner = controller["planner_server"]["ros__parameters"]["GridBased"]
 except (KeyError, TypeError) as exc:
-    raise SystemExit(f"hybrid navigation parameter tree is incomplete: {exc}") from exc
+    raise SystemExit(f"all.beifen navigation parameter tree is incomplete: {exc}") from exc
 if planner.get("allow_unknown") is not False:
     raise SystemExit(
-        "Smac must reject unknown space outside the observed map")
+        "NavFn must reject unknown space outside the observed map")
+if planner.get("plugin") != "nav2_navfn_planner/NavfnPlanner":
+    raise SystemExit("all.beifen profile must use Humble NavFn A*")
 if follow_path.get("plugin") != (
         "nav2_rotation_shim_controller::RotationShimController"):
     raise SystemExit("FollowPath must use the Humble RotationShim controller")
-if follow_path.get("primary_controller") != (
-        "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"):
-    raise SystemExit("FollowPath primary controller must be RPP")
+if follow_path.get("primary_controller") != "dwb_core::DWBLocalPlanner":
+    raise SystemExit("all.beifen FollowPath primary controller must be DWB")
 controller_params = controller["controller_server"]["ros__parameters"]
 no_shim = controller_params.get("FollowPathNoShim", {})
 if no_shim.get("plugin") != "dwb_core::DWBLocalPlanner":
     raise SystemExit("FollowPathNoShim DWB fallback is missing")
-for key, expected in (
-        ("desired_linear_vel", 0.20),
-        ("lookahead_dist", 0.40),
-        ("angular_dist_threshold", 2.80)):
-    value = follow_path.get(key, -1.0)
-    if abs(float(value) - expected) > 1e-6:
+def require_float(params, key, expected, label):
+    value = params.get(key)
+    try:
+        matches = abs(float(value) - expected) <= 1e-6
+    except (TypeError, ValueError):
+        matches = False
+    if not matches:
         raise SystemExit(
-            f"RPP/RotationShim {key} expected {expected}, got {value}")
-if follow_path.get("use_collision_detection") is not True:
-    raise SystemExit("RPP footprint collision detection must remain enabled")
-if follow_path.get("allow_reversing") is not False:
-    raise SystemExit("RPP must leave reverse maneuvers to the DWB fallback")
-if float(no_shim.get("min_vel_x", 0.0)) >= 0.0:
-    raise SystemExit("FollowPathNoShim must retain bounded reverse sampling")
+            f"{label} {key} expected {expected}, got {value}")
+
+
+for key, expected in (
+        ("max_vel_x", 0.20),
+        ("min_vel_x", 0.0),
+        ("angular_dist_threshold", 0.15),
+        ("xy_goal_tolerance", 0.30)):
+    require_float(follow_path, key, expected, "FollowPath")
+for key, expected in (
+        ("max_vel_x", 0.20),
+        ("min_vel_x", -0.08),
+        ("xy_goal_tolerance", 0.30)):
+    require_float(no_shim, key, expected, "FollowPathNoShim")
+require_float(
+    controller_params.get("goal_checker", {}),
+    "xy_goal_tolerance", 0.30, "goal_checker")
+critic_scales = {
+    "BaseObstacle.scale": 5.0,
+    "PathAlign.scale": 1.0,
+    "GoalAlign.scale": 2.0,
+    "PathDist.scale": 4.0,
+    "GoalDist.scale": 30.0,
+    "PreferForward.scale": 10.0,
+    "RotateToGoal.scale": 2.0,
+}
+for controller_name, params in (
+        ("FollowPath", follow_path),
+        ("FollowPathNoShim", no_shim)):
+    for key, expected in critic_scales.items():
+        require_float(params, key, expected, controller_name)
+if float(controller_params.get("controller_frequency", 0.0)) != 20.0:
+    raise SystemExit("all.beifen controller frequency must be 20 Hz")
+if float(controller_params["progress_checker"].get(
+        "movement_time_allowance", 0.0)) != 30.0:
+    raise SystemExit("all.beifen progress allowance must be 30 seconds")
 PY
 }
 
@@ -1230,9 +1261,9 @@ log "  2D authority    : Cartographer V13 + $CARTOGRAPHER_ODOM_TOPIC"
 log "  2D SLAM config  : $CARTOGRAPHER_CONFIG"
   log "  Global color 3D : RTAB-Map enabled=$ENABLE_RTABMAP, ${RTABMAP_RATE:-2.0} Hz"
   log "  RTAB auto-pause : ${RTABMAP_ON_DEMAND_PAUSE:-false} (false keeps loop closure alive)"
-log "  Navigation      : $ENABLE_NAVIGATION (SmacPlanner2D + smooth RPP / maneuverable DWB)"
+log "  Navigation      : $ENABLE_NAVIGATION (all.beifen NavFn A* + DWB + custom BT)"
 log "  Nav activation  : $(if is_true "$ENABLE_NAVIGATION"; then printf 'staged after sensor readiness'; else printf 'disabled'; fi)"
-log "  Loop correction : $(if is_true "$ENABLE_NAVIGATION"; then printf 'online, 1.5s motion hold + 1Hz replan'; else printf 'mapping only'; fi)"
+log "  Loop correction : $(if is_true "$ENABLE_NAVIGATION"; then printf 'online, large-jump-only 1.0s hold'; else printf 'mapping only'; fi)"
 log "  Dynamic 3D layer: STVL=${ENABLE_STVL:-true} (bounded recent + filtered RTAB walls)"
 log "  2D scan input   : /scan_timed_v2_filtered (filter=$ENABLE_FIXED_SCAN_FILTER)"
 log "  Visual EKF      : $ENABLE_VISUAL_FUSION (RGB-D vx/vy + STM32 yaw/vx)"

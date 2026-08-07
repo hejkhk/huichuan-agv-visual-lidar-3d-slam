@@ -103,15 +103,20 @@ for file in \
   "$LIDAR_SRC/lidar_py/system_resource_monitor.py" \
   "$LIDAR_SRC/lidar_py/slam_correction_logic.py" \
   "$LIDAR_SRC/lidar_py/slam_correction_guard.py" \
+  "$ROOT_DIR/lidar/chapt1_ws/src/short_goal_bt/include/short_goal_bt/dynamic_spin_action.hpp" \
+  "$ROOT_DIR/lidar/chapt1_ws/src/short_goal_bt/src/dynamic_spin_action.cpp" \
   "$LOCAL_DEPTH_SRC/src/mutable_navigation_map_node.cpp" \
   "$LIDAR_SRC/rviz/dual_resolution_3d_localization.rviz" \
   "$ROOT_DIR/lidar/chapt1_ws/src/reloc_rviz_panel/reloc_panel_plugin.xml" \
   "$LIDAR_SRC/config/nav2_auto_mapping_humble.yaml" \
   "$LIDAR_SRC/config/nav2_dual_3d_dwb_humble_override.yaml" \
+  "$LIDAR_SRC/config/nav2_all_beifen_humble_override.yaml" \
   "$LIDAR_SRC/config/nav2_dual_3d_stvl_override.yaml" \
   "$LIDAR_SRC/config/frontier_auto_mapping_humble.yaml" \
   "$LIDAR_SRC/behavior_trees/navigate_to_pose_humble.xml" \
-  "$LIDAR_SRC/behavior_trees/navigate_through_poses_humble.xml"; do
+  "$LIDAR_SRC/behavior_trees/navigate_through_poses_humble.xml" \
+  "$LIDAR_SRC/behavior_trees/navigate_to_pose_all_beifen_humble.xml" \
+  "$LIDAR_SRC/behavior_trees/navigate_through_poses_all_beifen_humble.xml"; do
   [ -r "$file" ] || fail "Missing Humble project file: $file"
 done
 
@@ -132,6 +137,7 @@ def load_yaml(name):
 
 nav = load_yaml("nav2_auto_mapping_humble.yaml")
 dwb = load_yaml("nav2_dual_3d_dwb_humble_override.yaml")
+all_beifen = load_yaml("nav2_all_beifen_humble_override.yaml")
 stvl = load_yaml("nav2_dual_3d_stvl_override.yaml")
 load_yaml("frontier_auto_mapping_humble.yaml")
 
@@ -140,6 +146,8 @@ if not bt.get("plugin_lib_names"):
     raise SystemExit("Humble bt_navigator.plugin_lib_names is required")
 if "short_goal_behind_bt_node" not in bt["plugin_lib_names"]:
     raise SystemExit("Humble custom short-goal BT plugin is not loaded")
+if "nav2_goal_reached_condition_bt_node" not in bt["plugin_lib_names"]:
+    raise SystemExit("Humble all.beifen GoalReached plugin is not loaded")
 if bt.get("bt_loop_duration") != 50:
     raise SystemExit("Jetson Humble BT loop must remain bounded at 20 Hz")
 if bt.get("default_server_timeout") != 500:
@@ -182,39 +190,67 @@ waypoint = nav["waypoint_follower"]["ros__parameters"]["wait_at_waypoint"]
 if waypoint.get("plugin") != "nav2_waypoint_follower::WaitAtWaypoint":
     raise SystemExit("invalid Humble waypoint executor plugin name")
 
-controller = dwb["controller_server"]["ros__parameters"]
-if controller.get("controller_frequency") != 10.0:
-    raise SystemExit("Jetson Humble hybrid controller loop must remain at 10 Hz")
+controller = all_beifen["controller_server"]["ros__parameters"]
+if controller.get("controller_frequency") != 20.0:
+    raise SystemExit("all.beifen Humble controller loop must run at 20 Hz")
 if controller.get("progress_checker_plugin") != "progress_checker":
     raise SystemExit("Humble requires singular progress_checker_plugin")
 if "progress_checker_plugins" in controller:
     raise SystemExit("Jazzy progress_checker_plugins leaked into Humble")
 if controller["progress_checker"].get("plugin") != "nav2_controller::SimpleProgressChecker":
     raise SystemExit("Humble SimpleProgressChecker is not selected")
-if controller["progress_checker"].get("movement_time_allowance") != 15.0:
-    raise SystemExit("hybrid fallback progress allowance changed")
+if controller["progress_checker"].get("movement_time_allowance") != 30.0:
+    raise SystemExit("all.beifen progress allowance changed")
 follow = controller["FollowPath"]
 if follow.get("plugin") != "nav2_rotation_shim_controller::RotationShimController":
     raise SystemExit("invalid Humble RotationShim plugin name")
-if follow.get("primary_controller") != (
-        "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"):
-    raise SystemExit("FollowPath does not wrap RPP")
+if follow.get("primary_controller") != "dwb_core::DWBLocalPlanner":
+    raise SystemExit("all.beifen FollowPath does not wrap DWB")
 no_shim = controller.get("FollowPathNoShim", {})
 if no_shim.get("plugin") != "dwb_core::DWBLocalPlanner":
     raise SystemExit("NoShim DWB controller is missing")
-if follow.get("desired_linear_vel") != 0.20:
-    raise SystemExit("navigation gear-2 velocity changed")
-if follow.get("lookahead_dist") != 0.40:
-    raise SystemExit("hybrid RPP lookahead changed")
-if follow.get("use_collision_detection") is not True:
-    raise SystemExit("RPP footprint collision detection is disabled")
-if follow.get("allow_reversing") is not False:
-    raise SystemExit("RPP must delegate reverse maneuvers to DWB")
-if no_shim.get("min_vel_x", 0.0) >= 0.0:
-    raise SystemExit("NoShim controller lost bounded reverse sampling")
-planner = dwb["planner_server"]["ros__parameters"]["GridBased"]
-if planner.get("plugin") != "nav2_smac_planner/SmacPlanner2D":
-    raise SystemExit("Humble SmacPlanner2D plugin name is invalid")
+
+def require_float(params, key, expected, label):
+    value = params.get(key)
+    try:
+        matches = abs(float(value) - expected) <= 1e-6
+    except (TypeError, ValueError):
+        matches = False
+    if not matches:
+        raise SystemExit(f"{label} {key} expected {expected}, got {value}")
+
+
+for key, expected in (
+        ("max_vel_x", 0.20),
+        ("min_vel_x", 0.0),
+        ("angular_dist_threshold", 0.15),
+        ("xy_goal_tolerance", 0.30)):
+    require_float(follow, key, expected, "FollowPath")
+for key, expected in (
+        ("max_vel_x", 0.20),
+        ("min_vel_x", -0.08),
+        ("xy_goal_tolerance", 0.30)):
+    require_float(no_shim, key, expected, "FollowPathNoShim")
+require_float(
+    controller.get("goal_checker", {}),
+    "xy_goal_tolerance", 0.30, "goal_checker")
+critic_scales = {
+    "BaseObstacle.scale": 5.0,
+    "PathAlign.scale": 1.0,
+    "GoalAlign.scale": 2.0,
+    "PathDist.scale": 4.0,
+    "GoalDist.scale": 30.0,
+    "PreferForward.scale": 10.0,
+    "RotateToGoal.scale": 2.0,
+}
+for controller_name, params in (
+        ("FollowPath", follow),
+        ("FollowPathNoShim", no_shim)):
+    for key, expected in critic_scales.items():
+        require_float(params, key, expected, controller_name)
+planner = all_beifen["planner_server"]["ros__parameters"]["GridBased"]
+if planner.get("plugin") != "nav2_navfn_planner/NavfnPlanner":
+    raise SystemExit("Humble all.beifen NavFn plugin name is invalid")
 if planner.get("allow_unknown") is not False:
     raise SystemExit("global planner must reject unknown map space")
 
@@ -233,13 +269,15 @@ for costmap_name in ("local_costmap", "global_costmap"):
         raise SystemExit(f"{costmap_name} StaticLayer must consume /map_updates")
     if params.get("use_maximum") is not True:
         raise SystemExit(f"{costmap_name} lost maximum safety combination")
-    inflation = dwb[costmap_name][costmap_name]["ros__parameters"]["inflation_layer"]
+    inflation = all_beifen[costmap_name][costmap_name]["ros__parameters"]["inflation_layer"]
     if inflation.get("inflation_radius") != 0.10:
         raise SystemExit(f"{costmap_name} inflation radius changed")
     if inflation.get("cost_scaling_factor") != 8.0:
         raise SystemExit(f"{costmap_name} inflation scaling changed")
 
-for name in ("navigate_to_pose_humble.xml", "navigate_through_poses_humble.xml"):
+for name in (
+        "navigate_to_pose_all_beifen_humble.xml",
+        "navigate_through_poses_all_beifen_humble.xml"):
     xml_root = ET.parse(root / "behavior_trees" / name).getroot()
     if "BTCPP_format" in xml_root.attrib:
         raise SystemExit(f"BT.CPP 4 marker is invalid on Humble: {name}")
@@ -247,23 +285,20 @@ for name in ("navigate_to_pose_humble.xml", "navigate_through_poses_humble.xml")
     for forbidden in ("error_code_id=", "WouldAPlannerRecoveryHelp", "WouldAControllerRecoveryHelp"):
         if forbidden in text:
             raise SystemExit(f"Jazzy BT port/node leaked into {name}: {forbidden}")
-    if 'PathExpiringTimer seconds="1.0"' not in text:
-        raise SystemExit(
-            f"{name} can retain a pre-loop-correction path for too long")
-    if name == "navigate_to_pose_humble.xml":
+    if name == "navigate_to_pose_all_beifen_humble.xml":
         for required in (
-                "InitialPathPreRotate", "SpinSafetyCheck", "SelectController",
-                "ControllerSelected", "ReverseEscapeMonitor",
-                "SmoothRPPThenManeuverableDWB", "FollowPathNoShim"):
+            "InitialPathPreRotate", "DynamicSpin", "SpinSafetyCheck", "SelectController",
+                "ControllerSelected", "ReverseEscapeMonitor", "BackoffAndReplan",
+                "ClearAndSpin360", "FollowPathNoShim", "NavigationTimeout"):
             if required not in text:
                 raise SystemExit(f"custom Humble navigation behavior missing: {required}")
 
 dual = (root / "launch" / "dual_resolution_3d_slam.launch.py").read_text(encoding="utf-8")
 for required in (
     "cartographer_auto_mapping_humble_launch.py",
-    "navigate_to_pose_humble.xml",
-    "navigate_through_poses_humble.xml",
-    "nav2_dual_3d_dwb_humble_override.yaml",
+    "navigate_to_pose_all_beifen_humble.xml",
+    "navigate_through_poses_all_beifen_humble.xml",
+    "nav2_all_beifen_humble_override.yaml",
     '"camera_time_domain", default_value="global"',
     '"rgbd_sync_max_interval", default_value="0.045"',
     '"rgbd_sync_warn_p95_ms", default_value="45.0"',
@@ -280,8 +315,10 @@ for required in (
     '"update_topic": "/map_updates"',
     "cartographer_reloc",
     "localization_bringup",
-    '"strong_match_score": 0.75',
-    '"strong_match_min_margin": 0.012',
+    '"strong_match_score": 0.90',
+    '"strong_match_min_margin": 0.035',
+    '"trajectory_restart_delay_sec": 1.0',
+    '"max_verify_tf_age_sec": 0.75',
     '"depth_qos": "DEFAULT"',
     '"depth_camera_info_qos": "DEFAULT"',
     "system_resource_monitor",
@@ -320,6 +357,21 @@ if "system_resource_monitor = lidar_py.system_resource_monitor:main" not in setu
     raise SystemExit("resource monitor console entry point is missing")
 if "slam_correction_guard = lidar_py.slam_correction_guard:main" not in setup_text:
     raise SystemExit("SLAM correction guard console entry point is missing")
+
+dynamic_spin = (
+    root.parent / "short_goal_bt" / "src" / "dynamic_spin_action.cpp"
+).read_text(encoding="utf-8")
+for required in (
+        'getInput("spin_dist"', "goal_.target_yaw = spin_dist",
+        "should_send_goal_ = false"):
+    if required not in dynamic_spin:
+        raise SystemExit(
+            f"Humble runtime spin-port workaround missing: {required}")
+
+lidar_timing = (root / "lidar_py" / "lidar_timing.py").read_text(
+    encoding="utf-8")
+if "mapped_ns = min(mapped_ns, int(receipt_ns) - int(wire_ns))" not in lidar_timing:
+    raise SystemExit("LiDAR device clock can still publish future timestamps")
 
 guard = (root / "lidar_py" / "slam_correction_guard.py").read_text(
     encoding="utf-8")
@@ -419,6 +471,13 @@ if "wait_topic /camera/depth/image_raw 30" in runner:
         "launcher must not deserialize full depth frames with ros2cli before releasing motion")
 if "strong_match_score" not in reloc or "strong_match_min_margin" not in reloc:
     raise SystemExit("startup relocalizer is missing the guarded strong-match gate")
+for required in (
+        "restart_wait", "trajectory_restart_delay_sec",
+        "active_trajectory_confirmed", "max_verify_tf_age_sec",
+        "min_verify_tf_advance_sec"):
+    if required not in reloc:
+        raise SystemExit(
+            f"startup relocalizer freshness contract missing: {required}")
 if "retry_wait" not in reloc or "max_auto_attempts" not in reloc:
     raise SystemExit("startup relocalizer is missing bounded automatic retries")
 if "wait_topic /cartographer_pose_odom 30" not in runner:
@@ -498,7 +557,7 @@ if [ "${1:-}" = "--build" ]; then
   MERGED_PARAMS="$BUILD_ROOT/humble_nav2_smoke.yaml"
   "$SYSTEM_PYTHON" -I - \
     "$LIDAR_SRC/config/nav2_auto_mapping_humble.yaml" \
-    "$LIDAR_SRC/config/nav2_dual_3d_dwb_humble_override.yaml" \
+    "$LIDAR_SRC/config/nav2_all_beifen_humble_override.yaml" \
     "$LIDAR_SRC/config/nav2_dual_3d_stvl_override.yaml" \
     "$MERGED_PARAMS" <<'PY'
 import copy
@@ -524,9 +583,10 @@ for source in sys.argv[1:-1]:
 with pathlib.Path(sys.argv[-1]).open("w", encoding="utf-8") as stream:
     bt_dir = pathlib.Path(sys.argv[1]).parent.parent / "behavior_trees"
     merged.setdefault("bt_navigator", {}).setdefault("ros__parameters", {}).update({
-        "default_nav_to_pose_bt_xml": str(bt_dir / "navigate_to_pose_humble.xml"),
+        "default_nav_to_pose_bt_xml": str(
+            bt_dir / "navigate_to_pose_all_beifen_humble.xml"),
         "default_nav_through_poses_bt_xml": str(
-            bt_dir / "navigate_through_poses_humble.xml"),
+            bt_dir / "navigate_through_poses_all_beifen_humble.xml"),
     })
     yaml.safe_dump(merged, stream, sort_keys=False)
 PY

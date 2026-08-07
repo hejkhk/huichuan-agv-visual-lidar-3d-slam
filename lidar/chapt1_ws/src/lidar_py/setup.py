@@ -53,6 +53,7 @@ setup(
           os.path.join('config', 'nav2_dual_3d_rpp_override.yaml'),
           os.path.join('config', 'nav2_dual_3d_rpp_humble_override.yaml'),
           os.path.join('config', 'nav2_dual_3d_dwb_humble_override.yaml'),
+          os.path.join('config', 'nav2_all_beifen_humble_override.yaml'),
           os.path.join('config', 'nav2_dual_3d_stvl_override.yaml'),
           os.path.join('config', 'ekf_wheel_imu.yaml'),
           os.path.join('config', 'ekf_visual_wheel_imu.yaml'),
@@ -68,7 +69,9 @@ setup(
          [os.path.join('behavior_trees', 'navigate_to_pose_jazzy.xml'),
           os.path.join('behavior_trees', 'navigate_through_poses_jazzy.xml'),
           os.path.join('behavior_trees', 'navigate_to_pose_humble.xml'),
-          os.path.join('behavior_trees', 'navigate_through_poses_humble.xml')]),
+          os.path.join('behavior_trees', 'navigate_through_poses_humble.xml'),
+          os.path.join('behavior_trees', 'navigate_to_pose_all_beifen_humble.xml'),
+          os.path.join('behavior_trees', 'navigate_through_poses_all_beifen_humble.xml')]),
 
     ],
     install_requires=['setuptools'],

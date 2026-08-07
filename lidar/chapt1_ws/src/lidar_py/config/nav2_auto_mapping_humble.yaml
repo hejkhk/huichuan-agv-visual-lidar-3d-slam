@@ -22,6 +22,7 @@ bt_navigator:
       - nav2_drive_on_heading_bt_node
       - nav2_wait_action_bt_node
       - nav2_clear_costmap_service_bt_node
+      - nav2_goal_reached_condition_bt_node
       - nav2_goal_updated_condition_bt_node
       - nav2_globally_updated_goal_condition_bt_node
       - nav2_is_path_valid_condition_bt_node

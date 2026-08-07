@@ -33,6 +33,14 @@ from std_msgs.msg import Bool, String
 from tf2_ros import Buffer, TransformListener
 
 
+def quaternion_yaw(rotation):
+    """Return planar yaw from a geometry_msgs quaternion."""
+    return math.atan2(
+        2.0 * (rotation.w * rotation.z + rotation.x * rotation.y),
+        1.0 - 2.0 * (rotation.y * rotation.y + rotation.z * rotation.z),
+    )
+
+
 class CartographerRelocalizer(Node):
     """Find an initial map pose and restart the active Cartographer trajectory."""
 
@@ -62,6 +70,12 @@ class CartographerRelocalizer(Node):
         self.declare_parameter("max_wait_sec", 120.0)
         self.declare_parameter("stationary_hold_sec", 1.0)
         self.declare_parameter("verify_hold_sec", 2.0)
+        self.declare_parameter("trajectory_restart_delay_sec", 1.0)
+        self.declare_parameter("max_verify_tf_age_sec", 0.75)
+        self.declare_parameter("min_verify_tf_advance_sec", 0.50)
+        self.declare_parameter("verify_timeout_sec", 8.0)
+        self.declare_parameter("manual_same_pose_translation_m", 0.15)
+        self.declare_parameter("manual_same_pose_yaw_deg", 5.0)
 
         self.map_topic = str(self.get_parameter("map_topic").value)
         self.scan_topic = str(self.get_parameter("scan_topic").value)
@@ -100,6 +114,18 @@ class CartographerRelocalizer(Node):
             self.get_parameter("stationary_hold_sec").value)
         self.verify_hold_sec = float(
             self.get_parameter("verify_hold_sec").value)
+        self.trajectory_restart_delay_sec = max(0.5, float(
+            self.get_parameter("trajectory_restart_delay_sec").value))
+        self.max_verify_tf_age_sec = max(0.2, float(
+            self.get_parameter("max_verify_tf_age_sec").value))
+        self.min_verify_tf_advance_sec = max(0.1, float(
+            self.get_parameter("min_verify_tf_advance_sec").value))
+        self.verify_timeout_sec = max(self.verify_hold_sec + 1.0, float(
+            self.get_parameter("verify_timeout_sec").value))
+        self.manual_same_pose_translation_m = max(0.0, float(
+            self.get_parameter("manual_same_pose_translation_m").value))
+        self.manual_same_pose_yaw = math.radians(max(0.0, float(
+            self.get_parameter("manual_same_pose_yaw_deg").value)))
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -154,6 +180,13 @@ class CartographerRelocalizer(Node):
         self.busy = False
         self.manual_request = False
         self.verify_since = None
+        self.verify_started_at = None
+        self.verify_tf_first_stamp_ns = None
+        self.verify_tf_last_stamp_ns = None
+        self.active_trajectory_confirmed = False
+        self.trajectory_state_request_pending = False
+        self.last_trajectory_state_request_at = 0.0
+        self.restart_not_before = 0.0
         self.expected_pose = None
         self.active_trajectory_id = None
         self.reference_trajectory_id = None
@@ -209,6 +242,15 @@ class CartographerRelocalizer(Node):
         self._publish_ready(False)
 
     def _tick(self):
+        if self.state == "restart_wait":
+            if time.monotonic() < self.restart_not_before:
+                return
+            if not self.start_client.service_is_ready():
+                if time.monotonic() - self.restart_not_before > 5.0:
+                    self._fail("Cartographer start service disappeared during restart")
+                return
+            self._start_new_trajectory()
+            return
         if self.state == "verifying":
             self._verify_pose()
             return
@@ -342,6 +384,8 @@ class CartographerRelocalizer(Node):
             self._publish_ready(False)
             return
         self.expected_pose = pose
+        if self._keep_healthy_manual_trajectory(pose):
+            return
         self.state = "restarting_trajectory"
         future = self.states_client.call_async(GetTrajectoryStates.Request())
         future.add_done_callback(self._on_states)
@@ -409,18 +453,30 @@ class CartographerRelocalizer(Node):
         seed = results[0]
         best = self._refine_match(bx, by, seed, resolution)
         second = 0.0
+        second_candidate = None
         for candidate in results[1:]:
             dx = (candidate[2] - best[2]) * resolution
             dy = (candidate[1] - best[1]) * resolution
             dyaw = abs(self._wrap(candidate[3] - best[3]))
             if math.hypot(dx, dy) > 0.8 or dyaw > math.radians(20.0):
                 second = candidate[0]
+                second_candidate = candidate
                 break
         score, row, col, yaw = best
         margin = score - second
+        best_x = origin_x + col * resolution
+        best_y = origin_y + row * resolution
+        second_text = "none"
+        if second_candidate is not None:
+            second_text = (
+                f"({origin_x + second_candidate[2] * resolution:.2f},"
+                f"{origin_y + second_candidate[1] * resolution:.2f},"
+                f"{math.degrees(second_candidate[3]):.1f}deg)")
         self.get_logger().info(
             f"Relocalization match: best={score:.3f}, second={second:.3f}, "
-            f"margin={margin:.3f}")
+            f"margin={margin:.3f}, "
+            f"best_pose=({best_x:.2f},{best_y:.2f},"
+            f"{math.degrees(yaw):.1f}deg), second_pose={second_text}")
         normal_match = score >= self.min_score and margin >= self.min_margin
         strong_match = (
             score >= self.strong_match_score
@@ -431,9 +487,42 @@ class CartographerRelocalizer(Node):
             self.get_logger().warn(
                 "Accepting high-confidence match through strong-score gate: "
                 f"score={score:.3f} margin={margin:.3f}")
-        x = origin_x + col * resolution
-        y = origin_y + row * resolution
-        return self._pose(x, y, yaw), score, second
+        return self._pose(best_x, best_y, yaw), score, second
+
+    def _keep_healthy_manual_trajectory(self, pose):
+        """Avoid restarting Cartographer when a manual match confirms its pose."""
+        if not self.manual_request or self.active_trajectory_id is None:
+            return False
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                "map", self.base_frame, rclpy.time.Time())
+        except Exception:
+            return False
+        stamp_ns = (
+            transform.header.stamp.sec * 1000000000
+            + transform.header.stamp.nanosec)
+        now_ns = self.get_clock().now().nanoseconds
+        if stamp_ns <= 0 or (now_ns - stamp_ns) / 1e9 > self.max_verify_tf_age_sec:
+            return False
+        current_yaw = quaternion_yaw(transform.transform.rotation)
+        candidate_yaw = quaternion_yaw(pose.orientation)
+        distance = math.hypot(
+            pose.position.x - transform.transform.translation.x,
+            pose.position.y - transform.transform.translation.y)
+        yaw_error = abs(self._wrap(candidate_yaw - current_yaw))
+        if (distance > self.manual_same_pose_translation_m
+                or yaw_error > self.manual_same_pose_yaw):
+            return False
+        self.pending_search = False
+        self.busy = False
+        self.manual_request = False
+        self.state = "localized"
+        self.detail = (
+            f"manual match confirms active trajectory: "
+            f"delta={distance:.3f}m/{math.degrees(yaw_error):.2f}deg")
+        self._publish_ready(True)
+        self.get_logger().info(self.detail)
+        return True
 
     def _refine_match(self, bx, by, seed, resolution):
         best_score, best_row, best_col, best_yaw = seed
@@ -504,12 +593,23 @@ class CartographerRelocalizer(Node):
             response = future.result()
             if response.status.code != 0:
                 raise RuntimeError(response.status.message)
-            self._start_new_trajectory()
+            # Cartographer's sensor collator keeps the last timestamp from the
+            # finished trajectory. Chassis IMU stamps trail wall time by a few
+            # hundred milliseconds, so starting immediately can feed an older
+            # first IMU sample and abort the whole Cartographer process.
+            self.state = "restart_wait"
+            self.detail = (
+                "finished old trajectory; draining sensor timestamps before "
+                "restart")
+            self.restart_not_before = (
+                time.monotonic() + self.trajectory_restart_delay_sec)
+            self._publish_state()
         except Exception as exc:
             self._fail(f"finish trajectory failed: {exc}")
 
     def _start_new_trajectory(self):
         try:
+            self.state = "starting_trajectory"
             request = StartTrajectory.Request()
             request.configuration_directory = self.config_dir
             request.configuration_basename = self.config_name
@@ -530,12 +630,42 @@ class CartographerRelocalizer(Node):
             self.state = "verifying"
             self.detail = f"trajectory {response.trajectory_id}"
             self.verify_since = None
+            self.verify_started_at = time.monotonic()
+            self.verify_tf_first_stamp_ns = None
+            self.verify_tf_last_stamp_ns = None
+            self.active_trajectory_confirmed = False
+            self.trajectory_state_request_pending = False
+            self.last_trajectory_state_request_at = 0.0
             self.busy = False
             self.pending_search = False
         except Exception as exc:
             self._fail(f"start trajectory failed: {exc}")
 
     def _verify_pose(self):
+        now_monotonic = time.monotonic()
+        if (self.verify_started_at is not None
+                and now_monotonic - self.verify_started_at
+                > self.verify_timeout_sec):
+            self._fail(
+                "new Cartographer trajectory did not produce a fresh, "
+                "verified map transform")
+            return
+        if not (self.states_client.service_is_ready()
+                and self.start_client.service_is_ready()):
+            self.verify_since = None
+            self.detail = "Cartographer trajectory services are unavailable"
+            return
+        if (not self.trajectory_state_request_pending
+                and now_monotonic - self.last_trajectory_state_request_at >= 0.5):
+            self.trajectory_state_request_pending = True
+            self.last_trajectory_state_request_at = now_monotonic
+            future = self.states_client.call_async(GetTrajectoryStates.Request())
+            future.add_done_callback(self._on_verify_states)
+        if not self.active_trajectory_confirmed:
+            self.verify_since = None
+            self.detail = (
+                f"waiting for active trajectory {self.active_trajectory_id}")
+            return
         points = self._scan_points_in_base()
         if points is None:
             self.verify_since = None
@@ -545,6 +675,26 @@ class CartographerRelocalizer(Node):
                 "map", self.base_frame, rclpy.time.Time())
         except Exception:
             self.verify_since = None
+            return
+        stamp_ns = (
+            transform.header.stamp.sec * 1000000000
+            + transform.header.stamp.nanosec)
+        now_ns = self.get_clock().now().nanoseconds
+        age_sec = (now_ns - stamp_ns) / 1e9 if stamp_ns > 0 else float("inf")
+        if stamp_ns <= 0 or age_sec < -0.10 or age_sec > self.max_verify_tf_age_sec:
+            self.verify_since = None
+            self.detail = f"waiting for fresh map TF: age={age_sec:.3f}s"
+            return
+        if self.verify_tf_first_stamp_ns is None:
+            self.verify_tf_first_stamp_ns = stamp_ns
+        self.verify_tf_last_stamp_ns = max(
+            stamp_ns, self.verify_tf_last_stamp_ns or stamp_ns)
+        tf_advance_sec = (
+            self.verify_tf_last_stamp_ns - self.verify_tf_first_stamp_ns) / 1e9
+        if tf_advance_sec < self.min_verify_tf_advance_sec:
+            self.verify_since = None
+            self.detail = (
+                f"waiting for advancing map TF: advanced={tf_advance_sec:.3f}s")
             return
         q = transform.transform.rotation
         yaw = math.atan2(
@@ -574,6 +724,30 @@ class CartographerRelocalizer(Node):
         self._publish_ready(True)
         self.get_logger().info(
             f"Localization verified; Nav2 may start (score={score:.3f})")
+
+    def _on_verify_states(self, future):
+        self.trajectory_state_request_pending = False
+        if self.state != "verifying":
+            return
+        try:
+            response = future.result()
+            if response.status.code != 0:
+                raise RuntimeError(response.status.message)
+            active = [
+                trajectory_id
+                for trajectory_id, state in zip(
+                    response.trajectory_states.trajectory_id,
+                    response.trajectory_states.trajectory_state)
+                if state == TrajectoryStates.ACTIVE
+            ]
+            if self.active_trajectory_id not in active:
+                self._fail(
+                    f"Cartographer trajectory {self.active_trajectory_id} "
+                    f"is not active; active={active}")
+                return
+            self.active_trajectory_confirmed = True
+        except Exception as exc:
+            self._fail(f"trajectory verification failed: {exc}")
 
     def _fail(self, detail):
         self.busy = False

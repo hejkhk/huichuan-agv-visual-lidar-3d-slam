@@ -13,7 +13,7 @@ Nav2、视觉近地面避障、自动 Frontier 探索、网页控制台和 SLAM 
 - 使用 LD14P 二维激光雷达和 Cartographer 进行在线二维建图。
 - 使用 STM32 上行的 `yaw + vx + wz + MCU tick` 生成 `/odom` 和平面 IMU。
 - 使用 Humble 原生 Nav2 和 `frontier_exploration_ros2` 完成网页选点导航与自动 Frontier 探索。
-- 使用 SmacPlanner2D 全局规划、Regulated Pure Pursuit 连续跟踪和受控恢复完成四轮差速导航。
+- 使用 all.beifen 的 NavFn A*、双 DWB 控制和受控恢复完成四轮差速导航。
 - 使用 Gemini2 SDK 读取 RGB 与深度图，检测二维雷达扫描不到的低矮障碍。
 - 在 Nav2 或网页遥控速度上叠加视觉避障，统一输出 `/cmd_vel_safe`。
 - 将 `/cmd_vel_safe` 换算为左右轮速度，再组装成四轮 `AA 55` 速度帧发送给 STM32。
@@ -39,7 +39,7 @@ Nav2、视觉近地面避障、自动 Frontier 探索、网页控制台和 SLAM 
 | `Cartographer V13` | SLAM | 融合过滤后的激光、里程计和 IMU，执行扫描匹配、子图构建和回环优化。 | 激光、`/odom`、`/imu_cartographer` | 轨迹、子图、`map -> odom` |
 | `/map + map->odom` | 地图/TF 结果 | 表示 Cartographer 当前构建的占据栅格地图和全局定位修正。 | Cartographer 轨迹与子图 | `/map`、`map -> odom`，供 Nav2、网页、RViz、Frontier 和日志使用 |
 | `robot_pose_publisher` | ROS 显示桥 | 从 TF 查询 `map -> base_link`，生成网页和 Frontier 易用的机器人位姿；网页 yaw 仅做轻度显示平滑。 | TF | `/robot_pose` |
-| `Nav2 SmacPlanner2D + RPP/DWB + BT` | 导航 | 融合 2D/3D 代价地图，RPP平滑跟线、DWB负责狭窄机动和后备恢复，不直接操作串口。 | `/map`、TF、过滤雷达、3/5 cm 有限时长 STVL、过滤视觉墙、目标点 | `/plan`、`/lookahead_arc`、`/cmd_vel_nav`、导航 Action 状态 |
+| `Nav2 all.beifen NavFn A* + DWB + BT` | 导航 | 使用 all.beifen 的低频 A* 规划、双 DWB 控制和分级恢复；继续融合本工程 2D/3D 代价地图，不直接操作串口。 | `/map`、TF、过滤雷达、3/5 cm 有限时长 STVL、过滤视觉墙、目标点 | `/plan`、`/cmd_vel_nav`、导航 Action 状态 |
 | `frontier_explorer` | 自动建图 | 使用 `auto_mapping_v1` 的 Humble 原生 C++ 算法选择可达 Frontier，并向 Nav2 连续提交探索目标。 | `/map`、TF、全局/局部 costmap、控制服务 | `NavigateToPose` 目标、Frontier 标记和完成事件 |
 | `frontier_web_bridge` | 网页探索桥 | 保持既有网页开关/状态接口，并将请求转换为原生 Frontier 控制服务；人工目标优先时负责停用探索。 | `/robot/web_control`、`/control_exploration`、Nav2 Action 状态 | `/auto_mapping/status`、`/auto_mapping/set_enabled` |
 | `depth_obstacle_node` | 视觉避障 | SDK 读取 Gemini2，采集地面 Baseline，计算九区障碍、距离、面积和左右风险。 | RGB/Depth、网页 Baseline/调试命令 | `/depth_obstacle`、`/depth/baseline_ready`、MJPEG |
@@ -81,7 +81,7 @@ flowchart LR
         CARTO["Cartographer V13"]
         MAP["/map + map->odom"]
         POSE["robot_pose_publisher"]
-        NAV2["Nav2 SmacPlanner2D + RPP/DWB + BT"]
+        NAV2["Nav2 all.beifen NavFn A* + 双 DWB + BT"]
         FRONTIER["frontier_explorer + frontier_web_bridge"]
         VISION["depth_obstacle_node"]
         FUSION["safety_fusion_node"]
@@ -194,21 +194,21 @@ STM32 默认以 50 Hz 上发 `0x07 NAVI`：
 
 ### 3.3 Nav2 导航链
 
-当前正式导航配置是 Humble 原生 `SmacPlanner2D + Regulated Pure Pursuit`：
+当前测试导航配置是移植到 Humble 的 `all.beifen NavFn A* + DWB`：
 
-- 全局规划：`SmacPlanner2D` 在 Cartographer、2D 雷达、分级深度 STVL 和视觉墙融合后的
-  5 cm 全局代价地图上生成高代价感知的中心路径。2D 内部后处理平滑已旁路，避免窄门
-  和墙角处把碰撞安全的栅格折线切成捷径。
-- 局部控制：RPP以10 Hz平滑跟踪主路径；旋转空间不足或RPP无进展时切换到允许受控倒车的DWB。两者都使用完整车体footprint碰撞检查。
-- 决策树：每 0.5 秒检查路径；失效立即重算，有效路径最多保持 4 秒，避免等价路线横跳。
-  临时障碍令路径不可用时先停车并持续重规划最多约 10 秒，覆盖全局 RGB-D 记忆的 8 秒
-  衰减时间；进度检查器给该安全停车保留 12 秒，只有持续阻塞才允许进入受控倒车和
-  小角度旋转脱困。
-- 脱困：局部失败先受控后退 `0.22 m @ 0.06 m/s`；外层恢复可继续后退 `0.30 m`，
-  再尝试左右 `0.35 rad` 小角度旋转并重新规划。
-- 速度使用导航二档物理包络：直行 `0.20 m/s`，0.85 m 半径弯道约
-  `0.12 m/s + 0.14 rad/s`，原地校正 `0.157 rad/s`。
-- 普通弯道连续跟踪；路径起始方向相差超过约 77°时才原地校正。
+- 全局规划：`NavFn A*` 在 Cartographer、2D 雷达、分级深度 STVL 和视觉墙融合后的
+  5 cm 全局代价地图上规划，未知区域禁止通行，避免路线跑出已知地图。
+- 局部控制：`RotationShim + DWB` 以 20 Hz 跟踪路径；完整车体原地旋转不安全时切换
+  `FollowPathNoShim` DWB，允许最多 `0.08 m/s` 的有限倒车采样。二档前进上限仍为 `0.20 m/s`。
+- 决策树：首次路径存在后执行后方目标/长路径预对向；运行中以 `0.2 Hz` 检查全局路径
+  有效性并按需重规划。DWB 在 20 Hz 控制循环中继续用实时局部代价图做轨迹碰撞评分。
+  进度窗口为 30 秒，避免正常低速转向被过早判为失败。
+- 脱困：跟踪失败后按 all.beifen 顺序尝试 `0.30 m` 安全倒车并重规划、清理代价地图后
+  做完整旋转安全检查、等待再试；全部运动仍经过 Nav2 footprint 和 C++ 最终碰撞门。
+- 速度使用导航二档物理包络：前进最高 `0.20 m/s`，角速度最高 `0.209 rad/s`，
+  由 DWB 在速度窗内根据路径、障碍物、目标方向和前向偏好评分选择。
+- 普通弯道由 DWB 连续跟踪；路径起始方向误差超过 `0.15 rad`（约 `8.6°`）时，
+  RotationShim 才尝试预对向，完整旋转空间不足时由行为树选择 NoShim DWB 机动。
 - 输出：controller 先发布 `/cmd_vel_nav_raw`，30 Hz 速度平滑后输出 `/cmd_vel_nav`，
   再经安全融合和 C++ 碰撞门，Nav2 不直接写串口。
 
@@ -379,13 +379,15 @@ Gemini2 的低矮障碍记忆由 Nav2 STVL 直接维护，而不是依赖 RViz �
 | `config/cartographer_2d_v9_nav_guarded.lua` | 导航专用 V9，仅提高走廊歧义闭环门槛；纯建图不使用。 |
 | `config/laser_filter.yaml` | 0.10–8.0 m 距离滤波和散斑滤波。 |
 | `config/nav2_auto_mapping_humble.yaml` | Nav2 公共节点、车体 footprint、基础代价地图和生命周期参数。 |
-| `config/nav2_dual_3d_dwb_humble_override.yaml` | Humble正式导航使用的SmacPlanner2D、RotationShim+RPP主控制器、DWB机动后备、二档速度和速度平滑参数。 |
+| `config/nav2_all_beifen_humble_override.yaml` | 当前测试导航使用的 all.beifen Humble 参数：NavFn A*、RotationShim+DWB、NoShim DWB、二档速度和 30 秒进度窗口。 |
+| `config/nav2_dual_3d_dwb_humble_override.yaml` | 上一版 SmacPlanner2D、RPP 主跟踪和 DWB 后备参数，保留用于明确回退，不再由一键脚本默认加载。 |
 | `config/nav2_dual_3d_mppi_override.yaml` | 历史 MPPI 参数，仅保留对照和人工回退，正式一键启动不加载。 |
 | `config/nav2_dual_3d_stvl_override.yaml` | 3 cm 局部、5 cm 全局的近期/几何验证持久 RGB-D 障碍记忆，以及过滤后 RTAB-Map 长期墙体的 Nav2 STVL 配置。 |
 | `config/frontier_auto_mapping_humble.yaml` | `auto_mapping_v1` 原生 Frontier 自动探索参数。 |
 | `config/lattice_forward_turnaround_5cm.json` | 历史 State Lattice 对照数据，当前正式导航不读取。 |
 | `config/lattice_diff_slip_compensated_45cm_5cm.json` | 历史滑移补偿 Lattice 对照数据，当前正式导航不读取。 |
-| `behavior_trees/navigate_to_pose_humble.xml` | 1 Hz 验路、有效路径最多保留 3 秒，并提供受控倒车/旋转脱困的 BT.CPP 3 单目标树。 |
+| `behavior_trees/navigate_to_pose_all_beifen_humble.xml` | all.beifen 单目标逻辑的 BT.CPP 3 移植，包含预旋转、双 DWB 切换和三级恢复。 |
+| `behavior_trees/navigate_through_poses_all_beifen_humble.xml` | all.beifen 多点导航的 Humble 行为树。 |
 | `behavior_trees/navigate_through_poses_humble.xml` | 相同验路、刷新和受控恢复策略的 BT.CPP 3 多目标树。 |
 | `rviz/nav2_display.rviz` | RViz 显示配置。 |
 
@@ -401,7 +403,7 @@ Gemini2 的低矮障碍记忆由 Nav2 STVL 直接维护，而不是依赖 RViz �
 |---|---|
 | `frontier_exploration_ros2/` | 直接接入 `auto_mapping_v1` 的 Humble C++ Frontier 搜索、目标调度、失败抑制和探索完成逻辑。 |
 | `short_goal_bt/` | Humble正式行为树使用的C++节点：预对向、旋转安全、控制器切换、倒车实位移验证和三级脱困状态。 |
-| `/opt/ros/humble` Nav2 | 系统安装的 SmacPlanner2D、Regulated Pure Pursuit、Behavior Server 和 BT Navigator。 |
+| `/opt/ros/humble` Nav2 | 系统安装的 NavFn、DWB、RotationShim、Behavior Server 和 BT Navigator。 |
 
 旧 `*_foxy` 回移植包已经删除；正式链只编译Humble系统插件的补充节点，不覆盖Nav2系统库。
 
@@ -843,20 +845,20 @@ cd ..
 |---:|---|---|
 | 1 | 对 `open_all.sh`、`open_all_log.sh` 和验证脚本执行 Bash 语法检查。 | 提前发现括号、引号和条件语句错误。 |
 | 2 | 检查 ROS2 Humble、Nav2、Cartographer、laser_filters、ROSBridge 等运行包，并核对 Cartographer 节点入口名。 | 避免启动到一半才发现 ROS 包或可执行文件缺失。 |
-| 3 | 解析 RPP/DWB/Smac/STVL YAML、BT.CPP 3 XML 和 Python 文件。 | 提前发现配置版本、插件名或语法错误。 |
+| 3 | 解析 NavFn/DWB/STVL YAML、BT.CPP 3 XML 和 Python 文件。 | 提前发现配置版本、插件名或语法错误。 |
 | 4 | 校验三个冻结建图文件的 SHA-256。 | 防止迁移导航时误改已经定版的 Cartographer 链。 |
 | 5 | 使用 `--build` 时，在纯 ASCII 缓存工作空间编译 `local_depth_cloud_cpp`、`frontier_exploration_ros2` 和 `lidar_py`。 | 避免中文物理路径触发 Humble rosidl/CMake 问题。 |
-| 6 | 依次启动并 `configure` controller、velocity smoother、planner、behavior、BT navigator 和 waypoint follower，随后立即清理。 | 真正加载RPP/DWB、SmacPlanner2D、STVL和行为树，避免“编译全绿、运行即死”的假通过。 |
+| 6 | 依次启动并 `configure` controller、velocity smoother、planner、behavior、BT navigator 和 waypoint follower，随后立即清理。 | 真正加载双 DWB、NavFn、STVL 和行为树，避免“编译全绿、运行即死”的假通过。 |
 
 第 6 阶段只执行 lifecycle `configure`，不会 `activate` controller，不发布 Twist，不打开雷达、
 STM32 或相机，也不要求已有地图。每个节点必须出现一行
 `[ OK ] Humble lifecycle configure: /节点名`；任一插件、参数或行为树加载失败时，脚本会打印该节点的
 错误摘要和日志末尾并返回非零状态。
 
-根目录 `.github/workflows/humble-preflight.yml` 会在推送到 `main` 或提交 Pull Request 时，在
+根目录 `.github/workflows/humble-preflight.yml` 会在推送到 `main`/`jetson` 或提交 Pull Request 时，在
 Ubuntu 22.04 + ROS 2 Humble 中自动重复依赖安装、编译、六节点 configure 冒烟测试和网页生产构建。
 GitHub Actions 通过不能替代实车方向、串口和避障验收，但可以拦截缺包、pluginlib、参数类型、
-RPP/DWB/Smac/STVL、行为树及网页构建回归。
+NavFn/DWB/STVL、行为树及网页构建回归。
 
 构建脚本固定使用 `/usr/bin/python3`（Ubuntu 22.04 的系统 Python 3.10），并隔离用户目录中的
 `uv`、Conda 或其他 Python。无需删除 `~/.local/bin/python3`，也不要为了 ROS 修改自己的 Python
@@ -1124,7 +1126,7 @@ SHA256:
 - IMU 上行帧注释从错误的 21 字节修正为 23 字节。
 - STM32 编码器帧注释从错误的 34 字节修正为 35 字节。
 - Humble 地图保存超时使用 `20.0` 秒；PBStream 请求只传递 Cartographer 支持的文件名。
-- 正式导航已不读取 State Lattice JSON；规划器只加载系统 Humble 的 `SmacPlanner2D`。
+- 正式导航已不读取 State Lattice JSON；当前测试规划器只加载系统 Humble 的 `NavFnPlanner`。
 - 一键启动会检查 Nav2 lifecycle 状态和 `/navigate_to_pose`，不会再把仅有节点名但配置失败的
   `planner_server` 误报为 ready。
 - `lidar_py` 补充 `cartographer_ros_msgs` 运行依赖并更新包描述。
@@ -1239,7 +1241,7 @@ LIDAR_PORT=/dev/ttyUSB1 CHASSIS_PORT=/dev/ttyUSB0 ./open_all.sh
 
 ## 双分辨率3D导航配置
 
-安装 Humble 的 RTAB-Map、robot_localization、Nav2 RPP 和 C++ STVL：
+安装 Humble 的 RTAB-Map、robot_localization、Nav2 DWB 和 C++ STVL：
 
 ```bash
 chmod +x STEP0_INSTALL_VISUAL_SLAM_DEPS.sh START_DUAL_2D_3D_NAVIGATION*.sh
@@ -1252,7 +1254,7 @@ chmod +x STEP0_INSTALL_VISUAL_SLAM_DEPS.sh START_DUAL_2D_3D_NAVIGATION*.sh
 ./START_DUAL_2D_3D_NAVIGATION.sh
 ```
 
-使用Cartographer + SmacPlanner2D + RPP主跟踪/DWB机动后备 + STVL + C++近碰撞门，不启用视觉EKF。
+使用 Cartographer + all.beifen NavFn A* + 双 DWB + STVL + C++ 近碰撞门，不启用视觉 EKF。
 首次测试必须先用此版本确认二维地图不歪、动态障碍能清除。
 
 一键脚本默认 `AUTO_BUILD=true`，但使用逐包SHA-256增量编译。本次更新首次启动会重编发生变化的
@@ -1323,25 +1325,26 @@ grep -E "COLLISION_GATE|VISUAL_LOOP_|CARTOGRAPHER_POSE_JUMP" \
 ```
 
 `VISUAL_LOOP_ACCEPTED`只表示 RTAB-Map内部3D图接受视觉回环。Cartographer仍是 `map -> odom`的唯一发布者，禁止手动把 RTAB-Map `publish_tf`改为 `true`。
-# 当前 Humble 导航配置（2026-08-04）
+# 当前 Humble 导航配置（2026-08-07）
 
 Ubuntu 22.04 / ROS 2 Humble 的正式导航链路现为：
 
 ```text
-SmacPlanner2D 全局规划
-  -> 1 Hz 有效期受限重规划
+NavFn A* 全局规划（未知区域禁止通行）
+  -> 0.2 Hz 低频重规划 + 持续路径有效性检查
   -> 自定义 C++ BT：后方目标预对向 / 完整车体旋转安全 / 实际倒车监控
-  -> RotationShim + RPP（平滑主跟踪）
-  -> NoShim DWB（旋转空间不足或RPP无进展时机动接管）
+  -> RotationShim + DWB（20 Hz 主跟踪）
+  -> NoShim DWB（旋转空间不足或主跟踪失败时机动接管）
   -> velocity_smoother
   -> 2D 雷达 + 3D STVL + 视觉墙 + C++ 最终碰撞门
   -> /cmd_vel_safe -> STM32
 ```
 
-默认控制器文件为 `config/nav2_dual_3d_dwb_humble_override.yaml`，文件名为兼容旧启动链保留，
-内容已经是RPP+DWB混合控制。`nav2_dual_3d_rpp_humble_override.yaml`继续作为纯RPP自动建图/回退配置。
+默认控制器文件为 `config/nav2_all_beifen_humble_override.yaml`。上一版
+`nav2_dual_3d_dwb_humble_override.yaml` 和纯 RPP 文件继续保留用于明确回退，但一键脚本不加载。
 `short_goal_bt` 已按 Humble 的 `behaviortree_cpp_v3` 编译并由 `bt_navigator` 动态加载；
-禁止再放置 `COLCON_IGNORE`。Python 版 `three_level_recovery_nav.py` 不进入正式链路，避免直接
+其中 `DynamicSpin` 专门修复 Humble 原生 Spin 只在构造时读取角度的问题。禁止再放置
+`COLCON_IGNORE`。Python 版 `three_level_recovery_nav.py` 不进入正式链路，避免直接
 发布 `/cmd_vel` 与 Nav2、安全仲裁争夺控制权。
 
 ## 10. 已有地图重定位导航
@@ -1386,9 +1389,9 @@ STVL、长期视觉墙、最终碰撞门和底盘安全链路均继续运行。
 `0.06 m/2 deg`，跨子图匹配限制为 `1.5 m/3 deg`。重定位版仍额外保留冻结 PBSTREAM
 和最多 `5` 个活动子图，因此不是重新建一张互不相干的地图，而是在旧图约束下持续纠正当前位姿。
 
-运行中若 Cartographer 更新 `map -> odom` 超过瞬时 `0.10 m/0.5 deg`，或在 `0.5 秒`内累计
-超过 `0.15 m/1 deg`，`slam_correction_guard` 会让安全仲裁锁住零速度至少 `1.5 秒`。
-Nav2 路径有效期为 `1 秒`，所以车辆恢复前必定重新计算校正后路径。重定位模式还会丢弃
+运行中若 Cartographer 更新 `map -> odom` 超过瞬时 `0.20 m/5 deg`，或在 `0.5 秒`内累计
+超过 `0.30 m/6 deg`，`slam_correction_guard` 才会把它判为真实跳变并锁住零速度 `1 秒`。
+普通 `0.5-1.2 deg` 扫描匹配细化不会再反复停车。重定位模式还会丢弃
 校正前的雷达证据、恢复不可变参考图并短暂冻结增量更新，避免旧坐标证据污染 `/map`。
 
 ### 重定位模式的实时二维地图

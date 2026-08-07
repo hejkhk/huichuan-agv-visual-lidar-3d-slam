@@ -38,7 +38,7 @@ def generate_launch_description():
         pkg_dir, "launch", "cartographer_auto_mapping_humble_launch.py")
     project_bt_dir = os.path.join(pkg_dir, "behavior_trees")
     controller_override = os.path.join(
-        pkg_dir, "config", "nav2_dual_3d_dwb_humble_override.yaml")
+        pkg_dir, "config", "nav2_all_beifen_humble_override.yaml")
     stvl_override = os.path.join(
         pkg_dir, "config", "nav2_dual_3d_stvl_override.yaml")
     camera_launch = os.path.join(
@@ -311,6 +311,9 @@ def generate_launch_description():
             "full_publish_period_sec": 30.0,
             "max_ray_range": 12.0,
             "endpoint_clearance_m": 0.12,
+            # Let Cartographer publish the transform matching this scan under
+            # normal Jetson scheduling load instead of dropping the update.
+            "tf_timeout_sec": 0.50,
             "pose_jump_translation_m": 0.35,
             "pose_jump_yaw_deg": 20.0,
             "freeze_after_pose_jump_sec": 2.0,
@@ -346,11 +349,18 @@ def generate_launch_description():
             "laser_frame": "laser_frame",
             "configuration_directory": os.path.join(pkg_dir, "config"),
             "configuration_basename": "cartographer_2d_localization.lua",
-            # A strong scan fit may have two nearby candidates in a corridor.
-            # Keep the normal gate strict and permit only a high-score,
-            # non-zero-margin fallback validated again after trajectory start.
-            "strong_match_score": 0.75,
-            "strong_match_min_margin": 0.012,
+            # A single scan cannot safely distinguish two similar corridor
+            # locations. Reject an ambiguous match instead of starting a
+            # trajectory at the wrong copy of the corridor.
+            "min_match_score": 0.40,
+            "min_score_margin": 0.035,
+            "strong_match_score": 0.90,
+            "strong_match_min_margin": 0.035,
+            "max_scan_points": 180,
+            "trajectory_restart_delay_sec": 1.0,
+            "max_verify_tf_age_sec": 0.75,
+            "min_verify_tf_advance_sec": 0.50,
+            "verify_timeout_sec": 8.0,
             "auto_retry_interval_sec": 5.0,
             "max_auto_attempts": 5,
         }],
@@ -858,15 +868,18 @@ def generate_launch_description():
             "hold_topic": "/slam_correction_hold",
             "status_topic": "/slam_correction/status",
             "sample_rate_hz": 30.0,
-            "translation_threshold_m": 0.10,
-            "yaw_threshold_deg": 0.50,
+            # map->odom normally refines by roughly 0.5-1.2 degrees per scan.
+            # The old 0.5 degree threshold held the vehicle for most of every
+            # turn. Only a real discontinuity should stop motion here.
+            "translation_threshold_m": 0.20,
+            "yaw_threshold_deg": 5.0,
             "window_sec": 0.50,
-            "window_translation_threshold_m": 0.15,
-            "window_yaw_threshold_deg": 1.0,
+            "window_translation_threshold_m": 0.30,
+            "window_yaw_threshold_deg": 6.0,
             "max_sample_gap_sec": 1.0,
             # /map and both costmaps publish at up to 1 Hz. Keep motion held
             # until a fresh global path has had time to replace the old one.
-            "hold_sec": 1.50,
+            "hold_sec": 1.00,
             "startup_grace_sec": 2.0,
         }],
     )
@@ -943,9 +956,10 @@ def generate_launch_description():
             "costmap_override_file": LaunchConfiguration(
                 "nav_costmap_override_file"),
             "bt_xml_file": os.path.join(
-                project_bt_dir, "navigate_to_pose_humble.xml"),
+                project_bt_dir, "navigate_to_pose_all_beifen_humble.xml"),
             "through_bt_xml_file": os.path.join(
-                project_bt_dir, "navigate_through_poses_humble.xml"),
+                project_bt_dir,
+                "navigate_through_poses_all_beifen_humble.xml"),
         }.items(),
     )
 
