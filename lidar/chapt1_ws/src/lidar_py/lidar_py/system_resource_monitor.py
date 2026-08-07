@@ -101,10 +101,10 @@ class SystemResourceMonitor(Node):
         self._prime_process_counters()
         self.timer = self.create_timer(self.sample_interval, self._sample)
         self.get_logger().info(
-            "RESOURCE_MONITOR active sample=%.1fs report=%.1fs csv=%s",
-            self.sample_interval,
-            self.report_interval,
-            self.csv_path or "disabled",
+            "RESOURCE_MONITOR active "
+            f"sample={self.sample_interval:.1f}s "
+            f"report={self.report_interval:.1f}s "
+            f"csv={self.csv_path or 'disabled'}"
         )
 
     def _open_csv(self) -> None:
