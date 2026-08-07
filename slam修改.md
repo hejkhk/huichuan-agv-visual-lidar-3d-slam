@@ -4262,3 +4262,20 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
 - Ubuntu 22.04 / ROS 2 Humble 不提供 `DeleteTrajectory` 服务。重定位节点已移除该 Jazzy 接口，
   冷启动加载 PBStream 时禁止 Cartographer 自动创建未定位轨迹，匹配成功后通过 Humble
   `StartTrajectory` 创建正确轨迹；手动重定位仅结束旧活动轨迹后重新创建。
+
+## 2026-08-07 Humble RPP 与 DWB 混合导航
+
+- 正式导航仍加载兼容文件名 `nav2_dual_3d_dwb_humble_override.yaml`，但其主控制器已改为
+  `RotationShim + RegulatedPurePursuitController`，负责普通路径的连续、平滑跟踪。
+- 保留 `FollowPathNoShim` DWB。完整车体预旋转空间不足，或RPP连续15秒没有达到7厘米进展时，
+  行为树自动切换DWB完成狭窄机动；DWB仍只允许最大 `0.08 m/s` 的受控倒车采样。
+- 单点和多点行为树都加入 `SmoothRPPThenManeuverableDWB`，DWB仍失败后才进入原有三级脱困，
+  不绕过STVL、Nav2 footprint碰撞检查或C++最终碰撞门。
+- Humble局部和全局软膨胀统一从 `0.49 m / 14.0` 调为 `0.10 m / 8.0`。真实
+  `66.5 x 66.5 cm` footprint、每侧1厘米padding和旋转扫掠圆保持不变，因此只是让规划更敢
+  进入窄门软代价区，不会允许车体穿墙。
+- 一键启动源配置契约、运行时参数审计、RPP依赖预检、Humble静态验证和README已同步；缺少
+  RPP插件、旧安装缓存仍返回0.49米膨胀、或RPP/DWB任一后备缺失时都会明确报错。
+- 一键启动的增量编译从“固定选择全部本地包”改为逐包SHA-256指纹。只有源码变化或安装缺失的
+  `local_depth_cloud_cpp`、`lidar_py`、`frontier_exploration_ros2`、`short_goal_bt`、
+  `reloc_rviz_panel`会进入 `colcon`；构建成功后才更新指纹，未变化时完全跳过colcon。

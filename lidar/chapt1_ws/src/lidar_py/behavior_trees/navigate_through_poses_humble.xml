@@ -24,7 +24,19 @@
         </ReactiveSequence>
       </RateController>
       <RecoveryNode number_of_retries="2" name="FollowPath">
-        <FollowPath path="{path}" controller_id="{selected_controller}"/>
+        <Fallback name="SmoothRPPThenManeuverableDWB">
+          <FollowPath path="{path}" controller_id="{selected_controller}"/>
+          <Sequence name="SwitchToDWBWhenRPPFails">
+            <Inverter>
+              <ControllerSelected selected_controller="{selected_controller}"
+                                  expected_controller="FollowPathNoShim"/>
+            </Inverter>
+            <RecoveryStatus stage="tracking_dwb" reason="rpp_no_progress"/>
+            <SelectController controller_id="FollowPathNoShim"
+                              selected_controller="{selected_controller}"/>
+            <FollowPath path="{path}" controller_id="{selected_controller}"/>
+          </Sequence>
+        </Fallback>
         <Sequence name="BoundedControllerRecovery">
           <IsPathValid path="{path}"/>
           <RoundRobin name="SafeEscapeActions">

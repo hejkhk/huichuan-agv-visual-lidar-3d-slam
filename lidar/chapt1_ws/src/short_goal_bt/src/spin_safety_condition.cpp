@@ -203,7 +203,7 @@ BT::NodeStatus SelectControllerAction::tick()
   if (controller_id == "FollowPathNoShim") {
     RCLCPP_WARN(
       node_->get_logger(),
-      "Pre-rotation is unsafe or failed; skipping Spin and selecting controller '%s'",
+      "Selecting maneuver controller '%s': pre-rotation is unsafe or primary tracking made no progress",
       controller_id.c_str());
   } else {
     RCLCPP_INFO(

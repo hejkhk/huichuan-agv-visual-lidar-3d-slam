@@ -90,8 +90,8 @@ local_costmap:
           observation_persistence: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 14.0
-        inflation_radius: 0.49
+        cost_scaling_factor: 8.0
+        inflation_radius: 0.10
       always_send_full_costmap: true
 
 global_costmap:
@@ -138,8 +138,8 @@ global_costmap:
           observation_persistence: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 14.0
-        inflation_radius: 0.49
+        cost_scaling_factor: 8.0
+        inflation_radius: 0.10
       always_send_full_costmap: true
 
 planner_server:

@@ -35,7 +35,8 @@ required_packages=(
   laser_filters rtabmap_slam rtabmap_odom octomap_server \
   robot_localization nav2_controller nav2_planner nav2_bt_navigator \
   nav2_behaviors nav2_velocity_smoother nav2_smac_planner \
-  nav2_rotation_shim_controller dwb_core dwb_plugins dwb_critics behaviortree_cpp_v3 \
+  nav2_rotation_shim_controller nav2_regulated_pure_pursuit_controller \
+  dwb_core dwb_plugins dwb_critics behaviortree_cpp_v3 \
   spatio_temporal_voxel_layer \
   rmw_cyclonedds_cpp depth_image_proc robot_state_publisher xacro
 )
@@ -178,25 +179,32 @@ if waypoint.get("plugin") != "nav2_waypoint_follower::WaitAtWaypoint":
 
 controller = dwb["controller_server"]["ros__parameters"]
 if controller.get("controller_frequency") != 10.0:
-    raise SystemExit("Jetson Humble DWB loop must remain at the sustainable 10 Hz")
+    raise SystemExit("Jetson Humble hybrid controller loop must remain at 10 Hz")
 if controller.get("progress_checker_plugin") != "progress_checker":
     raise SystemExit("Humble requires singular progress_checker_plugin")
 if "progress_checker_plugins" in controller:
     raise SystemExit("Jazzy progress_checker_plugins leaked into Humble")
 if controller["progress_checker"].get("plugin") != "nav2_controller::SimpleProgressChecker":
     raise SystemExit("Humble SimpleProgressChecker is not selected")
-if controller["progress_checker"].get("movement_time_allowance") != 25.0:
-    raise SystemExit("dynamic-obstacle progress allowance changed")
+if controller["progress_checker"].get("movement_time_allowance") != 15.0:
+    raise SystemExit("hybrid fallback progress allowance changed")
 follow = controller["FollowPath"]
 if follow.get("plugin") != "nav2_rotation_shim_controller::RotationShimController":
     raise SystemExit("invalid Humble RotationShim plugin name")
-if follow.get("primary_controller") != "dwb_core::DWBLocalPlanner":
-    raise SystemExit("FollowPath does not wrap DWB")
+if follow.get("primary_controller") != (
+        "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"):
+    raise SystemExit("FollowPath does not wrap RPP")
 no_shim = controller.get("FollowPathNoShim", {})
 if no_shim.get("plugin") != "dwb_core::DWBLocalPlanner":
     raise SystemExit("NoShim DWB controller is missing")
-if follow.get("max_vel_x") != 0.20:
+if follow.get("desired_linear_vel") != 0.20:
     raise SystemExit("navigation gear-2 velocity changed")
+if follow.get("lookahead_dist") != 0.40:
+    raise SystemExit("hybrid RPP lookahead changed")
+if follow.get("use_collision_detection") is not True:
+    raise SystemExit("RPP footprint collision detection is disabled")
+if follow.get("allow_reversing") is not False:
+    raise SystemExit("RPP must delegate reverse maneuvers to DWB")
 if no_shim.get("min_vel_x", 0.0) >= 0.0:
     raise SystemExit("NoShim controller lost bounded reverse sampling")
 planner = dwb["planner_server"]["ros__parameters"]["GridBased"]
@@ -215,8 +223,10 @@ for costmap_name in ("local_costmap", "global_costmap"):
         raise SystemExit(
             f"{costmap_name} must clear stale static cells below the robot footprint")
     inflation = dwb[costmap_name][costmap_name]["ros__parameters"]["inflation_layer"]
-    if inflation.get("inflation_radius") != 0.49:
+    if inflation.get("inflation_radius") != 0.10:
         raise SystemExit(f"{costmap_name} inflation radius changed")
+    if inflation.get("cost_scaling_factor") != 8.0:
+        raise SystemExit(f"{costmap_name} inflation scaling changed")
 
 for name in ("navigate_to_pose_humble.xml", "navigate_through_poses_humble.xml"):
     xml_root = ET.parse(root / "behavior_trees" / name).getroot()
@@ -229,7 +239,8 @@ for name in ("navigate_to_pose_humble.xml", "navigate_through_poses_humble.xml")
     if name == "navigate_to_pose_humble.xml":
         for required in (
                 "InitialPathPreRotate", "SpinSafetyCheck", "SelectController",
-                "ReverseEscapeMonitor", "FollowPathNoShim"):
+                "ControllerSelected", "ReverseEscapeMonitor",
+                "SmoothRPPThenManeuverableDWB", "FollowPathNoShim"):
             if required not in text:
                 raise SystemExit(f"custom Humble navigation behavior missing: {required}")
 
@@ -303,6 +314,12 @@ if "retry_wait" not in reloc or "max_auto_attempts" not in reloc:
     raise SystemExit("startup relocalizer is missing bounded automatic retries")
 if "wait_topic /cartographer_pose_odom 30" not in runner:
     raise SystemExit("mapping launcher must still verify Cartographer corrected pose")
+for required in (
+        "queue_incremental_package", ".lidar-py-source.sha256",
+        ".short-goal-bt-source.sha256", "skipping colcon"):
+    if required not in runner:
+        raise SystemExit(
+            f"per-package incremental build contract is missing: {required}")
 PY
 pass "Humble YAML, plugin and BT.CPP 3 contracts"
 
@@ -368,8 +385,8 @@ if [ "${1:-}" = "--build" ]; then
   MERGED_PARAMS="$BUILD_ROOT/humble_nav2_smoke.yaml"
   "$SYSTEM_PYTHON" -I - \
     "$LIDAR_SRC/config/nav2_auto_mapping_humble.yaml" \
-    "$LIDAR_SRC/config/nav2_dual_3d_stvl_override.yaml" \
     "$LIDAR_SRC/config/nav2_dual_3d_dwb_humble_override.yaml" \
+    "$LIDAR_SRC/config/nav2_dual_3d_stvl_override.yaml" \
     "$MERGED_PARAMS" <<'PY'
 import copy
 import pathlib

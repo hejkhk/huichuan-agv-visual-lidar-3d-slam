@@ -356,7 +356,7 @@ RTABMAP_ODOM_TOPIC=/cartographer_pose_odom
 if is_true "$ENABLE_STVL"; then
   NAV_COSTMAP_OVERRIDE="$SOURCE_WS/src/lidar_py/config/nav2_dual_3d_stvl_override.yaml"
 else
-  # Perception fallback only: keep the same Smac/DWB controller chain and use
+  # Perception fallback only: keep the same Smac/RPP+DWB controller chain and use
   # the base 2D obstacle layers. Never revive the retired MPPI controller just
   # because STVL was disabled for diagnosis.
   NAV_COSTMAP_OVERRIDE="$SOURCE_WS/src/lidar_py/config/nav2_auto_mapping_humble.yaml"
@@ -735,6 +735,38 @@ source_tree_fingerprint() {
     LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}'
 }
 
+queue_incremental_package() {
+  local package="$1" source_dir="$2" marker_name="$3"
+  local fingerprint="" marker="" previous="" install_marker="" reason=""
+
+  [ -f "$source_dir/package.xml" ] || \
+    die "Incremental-build source is incomplete: $source_dir"
+  fingerprint="$(source_tree_fingerprint "$source_dir")"
+  [ -n "$fingerprint" ] || die "Could not fingerprint package: $package"
+  marker="$CACHE_WS/$marker_name"
+  [ -f "$marker" ] && previous="$(cat "$marker")"
+  install_marker="$INSTALL_BASE/$package/share/$package/package.sh"
+
+  if [ "$previous" = "$fingerprint" ] && [ -f "$install_marker" ]; then
+    log "[build] $package unchanged; using the cached install."
+    return 0
+  fi
+
+  if [ ! -f "$install_marker" ]; then
+    reason="not installed"
+  elif [ -z "$previous" ]; then
+    reason="has no source baseline"
+  else
+    reason="source changed"
+  fi
+  reset_cached_package "$package"
+  build_paths+=("$source_dir")
+  build_packages+=("$package")
+  build_fingerprint_markers+=("$marker")
+  build_fingerprint_values+=("$fingerprint")
+  log "[build] $package $reason; queued for incremental rebuild."
+}
+
 wait_parameter_value() {
   local node="$1" parameter="$2" expected="$3" timeout_sec="${4:-30}"
   local failure_level="${5:-ERROR}"
@@ -813,43 +845,48 @@ for label in ("local_costmap", "global_costmap"):
         "inflation_radius",
         controller_inflation.get("inflation_radius", -1.0),
     )
-    if abs(float(radius) - 0.49) > 1e-6:
+    if abs(float(radius) - 0.10) > 1e-6:
         raise SystemExit(
-            f"{label} inflation_radius expected 0.49, got {radius}")
+            f"{label} inflation_radius expected 0.10, got {radius}")
     scaling = costmap_inflation.get(
         "cost_scaling_factor",
         controller_inflation.get("cost_scaling_factor", -1.0),
     )
-    if abs(float(scaling) - 14.0) > 1e-6:
+    if abs(float(scaling) - 8.0) > 1e-6:
         raise SystemExit(
-            f"{label} cost_scaling_factor expected 14.0, got {scaling}")
+            f"{label} cost_scaling_factor expected 8.0, got {scaling}")
 
 try:
     follow_path = controller["controller_server"]["ros__parameters"][
         "FollowPath"]
     planner = controller["planner_server"]["ros__parameters"]["GridBased"]
 except (KeyError, TypeError) as exc:
-    raise SystemExit(f"DWB navigation parameter tree is incomplete: {exc}") from exc
+    raise SystemExit(f"hybrid navigation parameter tree is incomplete: {exc}") from exc
 if planner.get("allow_unknown") is not False:
     raise SystemExit(
         "Smac must reject unknown space outside the observed map")
 if follow_path.get("plugin") != (
         "nav2_rotation_shim_controller::RotationShimController"):
     raise SystemExit("FollowPath must use the Humble RotationShim controller")
-if follow_path.get("primary_controller") != "dwb_core::DWBLocalPlanner":
-    raise SystemExit("FollowPath primary controller must be DWB")
+if follow_path.get("primary_controller") != (
+        "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"):
+    raise SystemExit("FollowPath primary controller must be RPP")
 controller_params = controller["controller_server"]["ros__parameters"]
 no_shim = controller_params.get("FollowPathNoShim", {})
 if no_shim.get("plugin") != "dwb_core::DWBLocalPlanner":
     raise SystemExit("FollowPathNoShim DWB fallback is missing")
 for key, expected in (
-        ("max_vel_x", 0.20),
-        ("max_vel_theta", 0.209),
+        ("desired_linear_vel", 0.20),
+        ("lookahead_dist", 0.40),
         ("angular_dist_threshold", 2.80)):
     value = follow_path.get(key, -1.0)
     if abs(float(value) - expected) > 1e-6:
         raise SystemExit(
-            f"DWB/RotationShim {key} expected {expected}, got {value}")
+            f"RPP/RotationShim {key} expected {expected}, got {value}")
+if follow_path.get("use_collision_detection") is not True:
+    raise SystemExit("RPP footprint collision detection must remain enabled")
+if follow_path.get("allow_reversing") is not False:
+    raise SystemExit("RPP must leave reverse maneuvers to the DWB fallback")
 if float(no_shim.get("min_vel_x", 0.0)) >= 0.0:
     raise SystemExit("FollowPathNoShim must retain bounded reverse sampling")
 PY
@@ -1000,7 +1037,7 @@ for pkg in orbbec_camera cartographer_ros laser_filters rtabmap_slam rtabmap_rvi
   check_pkg "$pkg"
 done
 if is_true "$ENABLE_NAVIGATION"; then
-  for pkg in nav2_controller nav2_rotation_shim_controller dwb_core dwb_plugins dwb_critics nav2_costmap_2d nav2_bt_navigator nav2_smac_planner nav2_velocity_smoother; do
+  for pkg in nav2_controller nav2_rotation_shim_controller nav2_regulated_pure_pursuit_controller dwb_core dwb_plugins dwb_critics nav2_costmap_2d nav2_bt_navigator nav2_smac_planner nav2_velocity_smoother; do
     check_pkg "$pkg"
   done
   if is_true "$USE_RVIZ"; then
@@ -1024,7 +1061,7 @@ fi
 if is_true "$ENABLE_NAVIGATION"; then
   verify_navigation_source_contract || \
     die "Navigation YAML contract is invalid; Nav2 was not launched"
-  log "[ready] Navigation source contract: static walls=65, robot start footprint=clear, unknown space=blocked, global RTAB wall duplication=off, inflation=0.49m/14.0"
+  log "[ready] Navigation source contract: static walls=65, robot start footprint=clear, unknown space=blocked, global RTAB wall duplication=off, inflation=0.10m/8.0"
 fi
 
 # RViz is intentionally owned by this outer runner and opened before colcon or
@@ -1105,50 +1142,46 @@ printf '%s' "$MAP_CONFIG_SIGNATURE" > "$DATABASE_SIGNATURE_PATH"
 touch "$DATABASE_COLOR_V4_MARKER"
 
 if is_true "$AUTO_BUILD" || [ ! -f "$INSTALL_BASE/setup.bash" ]; then
-  log "[build] Building isolated STEP11 workspace..."
-  local_cloud_source_fingerprint="$(source_tree_fingerprint \
-    "$SOURCE_WS/src/local_depth_cloud_cpp")"
-  local_cloud_fingerprint_marker="$CACHE_WS/.local-depth-cloud-source.sha256"
-  previous_local_cloud_fingerprint=""
-  [ -f "$local_cloud_fingerprint_marker" ] && \
-    previous_local_cloud_fingerprint="$(cat "$local_cloud_fingerprint_marker")"
-  local_cloud_cached_bin="$INSTALL_BASE/local_depth_cloud_cpp/lib/local_depth_cloud_cpp/depth_image_to_local_cloud_v21_node"
-  if [ -z "$previous_local_cloud_fingerprint" ] && \
-      [ -x "$local_cloud_cached_bin" ] && \
-      grep -aFq "$LOCAL_CLOUD_PIPELINE_VERSION" "$local_cloud_cached_bin"; then
-    previous_local_cloud_fingerprint="$local_cloud_source_fingerprint"
-    printf '%s\n' "$local_cloud_source_fingerprint" > \
-      "$local_cloud_fingerprint_marker"
-    log "[build] Adopted the compatible cached local_depth_cloud_cpp binary."
-  fi
-  if [ "$previous_local_cloud_fingerprint" != "$local_cloud_source_fingerprint" ]; then
-    reset_cached_package local_depth_cloud_cpp
-    log "[build] local_depth_cloud_cpp source changed; rebuilding that package only."
-  fi
-  build_paths=(
-    "$SOURCE_WS/src/local_depth_cloud_cpp"
-    "$SOURCE_WS/src/lidar_py"
-  )
-  build_packages=(local_depth_cloud_cpp lidar_py)
+  log "[build] Checking isolated STEP11 packages for source changes..."
+  build_paths=()
+  build_packages=()
+  build_fingerprint_markers=()
+  build_fingerprint_values=()
+
+  queue_incremental_package \
+    local_depth_cloud_cpp "$SOURCE_WS/src/local_depth_cloud_cpp" \
+    .local-depth-cloud-source.sha256
+  queue_incremental_package \
+    lidar_py "$SOURCE_WS/src/lidar_py" .lidar-py-source.sha256
   if is_true "$ENABLE_NAVIGATION"; then
-    build_paths+=(
-      "$SOURCE_WS/src/frontier_exploration_ros2"
-      "$SOURCE_WS/src/short_goal_bt"
-    )
-    build_packages+=(frontier_exploration_ros2 short_goal_bt)
+    queue_incremental_package \
+      frontier_exploration_ros2 "$SOURCE_WS/src/frontier_exploration_ros2" \
+      .frontier-exploration-source.sha256
+    queue_incremental_package \
+      short_goal_bt "$SOURCE_WS/src/short_goal_bt" \
+      .short-goal-bt-source.sha256
   fi
   if is_true "$LOCALIZATION_MODE"; then
-    build_paths+=("$SOURCE_WS/src/reloc_rviz_panel")
-    build_packages+=(reloc_rviz_panel)
+    queue_incremental_package \
+      reloc_rviz_panel "$SOURCE_WS/src/reloc_rviz_panel" \
+      .reloc-rviz-panel-source.sha256
   fi
-  PYTHONNOUSERSITE=1 colcon --log-base "$LOG_BASE" build \
-    --base-paths "${build_paths[@]}" \
-    --build-base "$BUILD_BASE" \
-    --install-base "$INSTALL_BASE" \
-    --symlink-install \
-    --packages-select "${build_packages[@]}"
-  printf '%s\n' "$local_cloud_source_fingerprint" > \
-    "$local_cloud_fingerprint_marker"
+
+  if [ "${#build_packages[@]}" -gt 0 ]; then
+    log "[build] Rebuilding changed packages: ${build_packages[*]}"
+    PYTHONNOUSERSITE=1 colcon --log-base "$LOG_BASE" build \
+      --base-paths "${build_paths[@]}" \
+      --build-base "$BUILD_BASE" \
+      --install-base "$INSTALL_BASE" \
+      --symlink-install \
+      --packages-select "${build_packages[@]}"
+    for index in "${!build_fingerprint_markers[@]}"; do
+      printf '%s\n' "${build_fingerprint_values[$index]}" > \
+        "${build_fingerprint_markers[$index]}"
+    done
+  else
+    log "[build] All selected packages are unchanged; skipping colcon."
+  fi
 fi
 [ -f "$INSTALL_BASE/setup.bash" ] || die "Build did not create $INSTALL_BASE/setup.bash"
 # shellcheck disable=SC1090
@@ -1190,7 +1223,7 @@ log "  2D authority    : Cartographer V13 + $CARTOGRAPHER_ODOM_TOPIC"
 log "  2D SLAM config  : $CARTOGRAPHER_CONFIG"
   log "  Global color 3D : RTAB-Map enabled=$ENABLE_RTABMAP, ${RTABMAP_RATE:-2.0} Hz"
   log "  RTAB auto-pause : ${RTABMAP_ON_DEMAND_PAUSE:-false} (false keeps loop closure alive)"
-log "  Navigation      : $ENABLE_NAVIGATION (SmacPlanner2D + safe DWB dual controller)"
+log "  Navigation      : $ENABLE_NAVIGATION (SmacPlanner2D + smooth RPP / maneuverable DWB)"
 log "  Nav activation  : $(if is_true "$ENABLE_NAVIGATION"; then printf 'staged after sensor readiness'; else printf 'disabled'; fi)"
 log "  Dynamic 3D layer: STVL=${ENABLE_STVL:-true} (bounded recent + filtered RTAB walls)"
 log "  2D scan input   : /scan_timed_v2_filtered (filter=$ENABLE_FIXED_SCAN_FILTER)"
@@ -1204,7 +1237,7 @@ if is_true "$ENABLE_NAVIGATION" && is_true "$ENABLE_STVL"; then
   log "  Obstacle memory : hard stop=1 frame; Nav2 mark=3 frames + geometry guard"
   log "                    RGB-D obstacles decay local/global=6s/8s"
   log "                    /map walls >=65% persist; filtered RTAB walls hold 15s"
-  log "  Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0"
+  log "  Costmap clearance: measured 66.5cm body + 1cm padding, soft inflation 0.10m/8.0"
 fi
 log "  Local FOV       : x ${LOCAL_X_MIN:-0.15}..${LOCAL_X_MAX:-4.0}, y ${LOCAL_Y_MIN:--2.5}..${LOCAL_Y_MAX:-2.5} m"
 log "  LiDAR position  : (${LIDAR_X:-0.20}, ${LIDAR_Y:-0.0}, ${LIDAR_Z:-0.4235}) m"
@@ -1445,10 +1478,10 @@ if is_true "$ENABLE_NAVIGATION"; then
     /global_costmap/global_costmap lethal_cost_threshold 65 4 WARNING || \
     runtime_costmap_contract_ok=false
   wait_parameter_value \
-    /local_costmap/local_costmap inflation_layer.inflation_radius 0.49 4 WARNING || \
+    /local_costmap/local_costmap inflation_layer.inflation_radius 0.10 4 WARNING || \
     runtime_costmap_contract_ok=false
   wait_parameter_value \
-    /global_costmap/global_costmap inflation_layer.inflation_radius 0.49 4 WARNING || \
+    /global_costmap/global_costmap inflation_layer.inflation_radius 0.10 4 WARNING || \
     runtime_costmap_contract_ok=false
   if [ "$runtime_costmap_contract_ok" != true ]; then
     log "[WARNING] Runtime costmap query was incomplete; source contract passed and navigation remains running."
