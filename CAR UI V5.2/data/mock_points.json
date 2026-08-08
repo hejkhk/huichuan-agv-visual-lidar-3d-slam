@@ -1,0 +1,32 @@
+[
+  {
+    "id": "p1",
+    "name": "前台",
+    "x": 6.46,
+    "y": 65.64,
+    "yaw": 0.9371281631617983,
+    "is_charging_point": false,
+    "created_at": "2026-01-01T00:00:00",
+    "last_navigated_at": null
+  },
+  {
+    "id": "charge",
+    "name": "充电站",
+    "x": 0.0,
+    "y": 0.0,
+    "yaw": 5.286693810559392,
+    "is_charging_point": true,
+    "created_at": "2026-01-01T00:00:00",
+    "last_navigated_at": null
+  },
+  {
+    "id": "6a4a575315",
+    "name": "测试1不",
+    "x": 6.46,
+    "y": 65.64,
+    "yaw": 6.201488358255356,
+    "is_charging_point": false,
+    "created_at": "2026-07-20T14:07:16",
+    "last_navigated_at": null
+  }
+]

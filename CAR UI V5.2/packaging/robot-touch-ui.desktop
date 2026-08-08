@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Robot Touch UI
+Name[zh_CN]=机器人车载触控屏
+Comment=Robot vehicle touchscreen control panel
+Comment[zh_CN]=机器人车载触摸控制界面
+Exec=robot-touch-ui
+Icon=robot-touch-ui
+Terminal=false
+Categories=Utility;Engineering;
+StartupNotify=true
+StartupWMClass=Robot Touch UI

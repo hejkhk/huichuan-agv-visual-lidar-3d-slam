@@ -1261,6 +1261,27 @@ pgrep -af 'brltty|ModemManager'
 
 ## 双分辨率3D导航配置
 
+### CAR UI、重定位与导航联合启动
+
+把每张地图的同名 `PGM + YAML + PBStream` 放入 `Loc_MAP/`，然后执行：
+
+```bash
+./START_UI_LOCALIZATION_NAVIGATION.sh
+```
+
+脚本会打开 `CAR UI V5.2`，并优先恢复上次选择的地图。定位版自身已经启用 Nav2；
+地图管理页面点击“使用地图”会安全切换地图、启动定位栈并自动执行启动重定位，成功发布的
+`/map` 会显示在 UI 地图页面。首次有多张地图且没有历史选择时，先在 UI 中选择，不会
+擅自加载错误地图。需要明确指定时执行：
+
+```bash
+./START_UI_LOCALIZATION_NAVIGATION.sh floor_1
+```
+
+当前选择记录在 `~/.cache/huichuan_agv/selected_map`；运行中的地图记录在
+`~/.cache/huichuan_agv/active_map`。UI 仍只通过 ROS 2 接入，STM32 串口继续由
+`chassis_node` 独占。
+
 安装 Humble 的 RTAB-Map、robot_localization、Nav2 DWB 和 C++ STVL：
 
 ```bash

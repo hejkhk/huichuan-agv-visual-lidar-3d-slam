@@ -1,0 +1,4 @@
+singleton Theme 1.0 Theme.qml
+singleton AppMetrics 1.0 AppMetrics.qml
+singleton I18n 1.0 I18n.qml
+singleton Performance 1.0 Performance.qml

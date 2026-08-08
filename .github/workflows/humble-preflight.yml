@@ -67,3 +67,44 @@ jobs:
         run: |
           npm ci
           npm run build
+
+  ui-validate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_IM_MODULE: qtvirtualkeyboard
+      ROBOT_API_MODE: mock
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: CAR UI V5.2/requirements-dev.txt
+
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libpulse0 libxkbcommon0
+
+      - name: Install UI dependencies
+        working-directory: CAR UI V5.2
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Validate UI and combined launcher
+        shell: bash
+        run: |
+          python -m compileall -q \
+            "CAR UI V5.2/main.py" \
+            "CAR UI V5.2/backend" \
+            "CAR UI V5.2/robot_api"
+          bash -n \
+            START_UI_LOCALIZATION_NAVIGATION.sh \
+            START_DUAL_2D_3D_LOCALIZATION.sh \
+            "CAR UI V5.2/run.sh"
+          python -m pytest -q "CAR UI V5.2/tests"

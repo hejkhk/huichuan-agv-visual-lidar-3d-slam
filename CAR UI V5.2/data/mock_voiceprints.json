@@ -1,0 +1,52 @@
+[
+  {
+    "id": "76c924a781",
+    "name": "锐龙",
+    "priority": 1
+  },
+  {
+    "id": "17191c513d",
+    "name": "棘背龙",
+    "priority": 2
+  },
+  {
+    "id": "4466e91672",
+    "name": "南方巨兽龙",
+    "priority": 3
+  },
+  {
+    "id": "64a2d66328",
+    "name": "暴虐霸王龙",
+    "priority": 4
+  },
+  {
+    "id": "bfa8ce8a0a",
+    "name": "奶龙",
+    "priority": 5
+  },
+  {
+    "id": "4f76c12243",
+    "name": "霸王龙",
+    "priority": 6
+  },
+  {
+    "id": "7d4aa7b195",
+    "name": "沧龙",
+    "priority": 7
+  },
+  {
+    "id": "531b3b0a1d",
+    "name": "翼龙",
+    "priority": 8
+  },
+  {
+    "id": "e61edf33bf",
+    "name": "迅猛龙",
+    "priority": 9
+  },
+  {
+    "id": "a002b0863f",
+    "name": "猛龙",
+    "priority": 10
+  }
+]

@@ -1,0 +1,48 @@
+name: Ubuntu 22.04 UI checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: huichuan-ui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_IM_MODULE: qtvirtualkeyboard
+      ROBOT_API_MODE: mock
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libpulse0 libxkbcommon0
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-dev.txt
+
+      - name: Python and shell syntax
+        shell: bash
+        run: |
+          python -m compileall -q main.py backend robot_api
+          bash -n run.sh start_ui_with_relay.sh build_deb.sh build_arm64_deb.sh
+
+      - name: Run API, map and QML tests
+        run: python -m pytest -q

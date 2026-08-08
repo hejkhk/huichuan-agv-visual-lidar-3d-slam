@@ -10,6 +10,13 @@ RVIZ_CONFIG="$ROOT_DIR/lidar/chapt1_ws/src/lidar_py/rviz/dual_resolution_3d_loca
 
 cd "$ROOT_DIR"
 
+if [ -z "$MAP_NAME" ] || [[ "$MAP_NAME" == */* ]] || \
+    [[ "$MAP_NAME" == *\\* ]] || [ "$MAP_NAME" = "." ] || \
+    [ "$MAP_NAME" = ".." ]; then
+  printf '[ERROR] Invalid localization map basename: %s\n' "$MAP_NAME" >&2
+  exit 2
+fi
+
 if [ ! -f "$MAP_YAML" ]; then
   printf '[ERROR] Missing localization map: %s\n' "$MAP_YAML" >&2
   printf '        Put map.yaml + its image + map.pbstream in Loc_MAP/.\n' >&2
@@ -66,6 +73,7 @@ fi
 export DUAL_3D_ENABLE_NAVIGATION=true
 export DUAL_3D_LOCALIZATION_MODE=true
 export DUAL_3D_STACK_MODE=localization
+export DUAL_3D_LOCALIZATION_MAP_NAME="$MAP_NAME"
 export DUAL_3D_LOCALIZATION_MAP_YAML="$MAP_RUNTIME_YAML"
 export DUAL_3D_LOCALIZATION_PBSTREAM="$MAP_PBSTREAM"
 export DUAL_3D_RVIZ_CONFIG_FILE="$RVIZ_CONFIG"

@@ -135,7 +135,11 @@ for file in \
   "$LIDAR_SRC/behavior_trees/navigate_to_pose_humble.xml" \
   "$LIDAR_SRC/behavior_trees/navigate_through_poses_humble.xml" \
   "$LIDAR_SRC/behavior_trees/navigate_to_pose_all_beifen_humble.xml" \
-  "$LIDAR_SRC/behavior_trees/navigate_through_poses_all_beifen_humble.xml"; do
+  "$LIDAR_SRC/behavior_trees/navigate_through_poses_all_beifen_humble.xml" \
+  "$ROOT_DIR/START_UI_LOCALIZATION_NAVIGATION.sh" \
+  "$ROOT_DIR/CAR UI V5.2/main.py" \
+  "$ROOT_DIR/CAR UI V5.2/backend/map_manager.py" \
+  "$ROOT_DIR/CAR UI V5.2/robot_api/stack_manager.py"; do
   [ -r "$file" ] || fail "Missing Humble project file: $file"
 done
 
@@ -515,7 +519,10 @@ PY
 pass "Humble YAML, plugin and BT.CPP 3 contracts"
 
 "$SYSTEM_PYTHON" -m compileall -q \
-  "$LIDAR_SRC/launch" "$LIDAR_SRC/lidar_py" || fail "Python syntax check failed"
+  "$LIDAR_SRC/launch" "$LIDAR_SRC/lidar_py" \
+  "$ROOT_DIR/CAR UI V5.2/backend" \
+  "$ROOT_DIR/CAR UI V5.2/robot_api" \
+  "$ROOT_DIR/CAR UI V5.2/main.py" || fail "Python syntax check failed"
 pass "Python launch/node syntax"
 
 for script in \
@@ -523,6 +530,8 @@ for script in \
   "$ROOT_DIR/START_DUAL_2D_3D_MAPPING.sh" \
   "$ROOT_DIR/START_DUAL_2D_3D_NAVIGATION.sh" \
   "$ROOT_DIR/START_DUAL_2D_3D_LOCALIZATION.sh" \
+  "$ROOT_DIR/START_UI_LOCALIZATION_NAVIGATION.sh" \
+  "$ROOT_DIR/CAR UI V5.2/run.sh" \
   "$ROOT_DIR/visual_laser_slam/run_dual_resolution_3d_slam.sh" \
   "$ROOT_DIR/CALIBRATE_CAMERA_EXTRINSIC.sh" \
   "$ROOT_DIR/CALIBRATE_CAMERA_YAW.sh"; do

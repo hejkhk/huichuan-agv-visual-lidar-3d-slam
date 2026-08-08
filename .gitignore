@@ -34,3 +34,13 @@ Thumbs.db
 web/node_modules/
 web_ctrl/web_server.log
 web_ctrl/web_server.pid
+
+# Embedded CAR UI runtime/build outputs
+CAR UI V5.2/.venv/
+CAR UI V5.2/__pycache__/
+CAR UI V5.2/.pytest_cache/
+CAR UI V5.2/logs/
+CAR UI V5.2/map_cache/
+CAR UI V5.2/build/
+CAR UI V5.2/dist/
+CAR UI V5.2/*.deb

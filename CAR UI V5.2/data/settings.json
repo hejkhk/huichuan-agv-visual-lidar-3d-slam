@@ -1,0 +1,19 @@
+{
+  "recent_point_ids": [
+    "p1",
+    "charge",
+    "6a4a575315"
+  ],
+  "volume": 36,
+  "voice_control_enabled": true,
+  "visual_follow_enabled": false,
+  "unknown_voice_allowed": false,
+  "parameters": {
+    "max_speed": 0.5,
+    "follow_distance": 4.5
+  },
+  "language": "zh",
+  "performance_mode": 2,
+  "ros_domain_id": 88,
+  "show_home_tutorial_on_startup": true
+}

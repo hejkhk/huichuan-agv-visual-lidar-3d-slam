@@ -20,11 +20,14 @@ STOP_REASON="unexpected_shell_exit"
 SHUTDOWN_REQUESTED=false
 LOCAL_CLOUD_PIPELINE_VERSION="v6.34"
 STACK_MODE="${DUAL_3D_STACK_MODE:-unknown}"
+LOCALIZATION_MAP_NAME="${DUAL_3D_LOCALIZATION_MAP_NAME:-}"
 STACK_STATE_DIR="$HOME/.cache/huichuan_agv"
 STACK_PID_FILE="$STACK_STATE_DIR/launcher.pid"
 STACK_MODE_FILE="$STACK_STATE_DIR/mode"
 STACK_ROOT_FILE="$STACK_STATE_DIR/project_root"
 STACK_RUN_DIR_FILE="$STACK_STATE_DIR/run_dir"
+STACK_ACTIVE_MAP_FILE="$STACK_STATE_DIR/active_map"
+STACK_SELECTED_MAP_FILE="$STACK_STATE_DIR/selected_map"
 
 log() {
   printf '%s\n' "$*"
@@ -40,7 +43,7 @@ clear_stack_state() {
   [ -r "$STACK_PID_FILE" ] && registered_pid="$(cat "$STACK_PID_FILE" 2>/dev/null || true)"
   if [ "$registered_pid" = "$$" ]; then
     rm -f -- "$STACK_PID_FILE" "$STACK_MODE_FILE" \
-      "$STACK_ROOT_FILE" "$STACK_RUN_DIR_FILE"
+      "$STACK_ROOT_FILE" "$STACK_RUN_DIR_FILE" "$STACK_ACTIVE_MAP_FILE"
   fi
 }
 
@@ -100,7 +103,7 @@ stop_registered_stack() {
   fi
 
   rm -f -- "$STACK_PID_FILE" "$STACK_MODE_FILE" \
-    "$STACK_ROOT_FILE" "$STACK_RUN_DIR_FILE"
+    "$STACK_ROOT_FILE" "$STACK_RUN_DIR_FILE" "$STACK_ACTIVE_MAP_FILE"
 }
 
 orbbec_video_nodes() {
@@ -1111,6 +1114,14 @@ mv -f "$STACK_PID_FILE.tmp" "$STACK_PID_FILE"
 mv -f "$STACK_MODE_FILE.tmp" "$STACK_MODE_FILE"
 mv -f "$STACK_ROOT_FILE.tmp" "$STACK_ROOT_FILE"
 mv -f "$STACK_RUN_DIR_FILE.tmp" "$STACK_RUN_DIR_FILE"
+if [ "$STACK_MODE" = "localization" ] && [ -n "$LOCALIZATION_MAP_NAME" ]; then
+  printf '%s\n' "$LOCALIZATION_MAP_NAME" >"$STACK_ACTIVE_MAP_FILE.tmp"
+  printf '%s\n' "$LOCALIZATION_MAP_NAME" >"$STACK_SELECTED_MAP_FILE.tmp"
+  mv -f "$STACK_ACTIVE_MAP_FILE.tmp" "$STACK_ACTIVE_MAP_FILE"
+  mv -f "$STACK_SELECTED_MAP_FILE.tmp" "$STACK_SELECTED_MAP_FILE"
+else
+  rm -f -- "$STACK_ACTIVE_MAP_FILE" "$STACK_ACTIVE_MAP_FILE.tmp"
+fi
 
 # Check camera ownership before package checks or incremental compilation, so
 # a busy Gemini2 fails quickly with the process/device details in runtime.log.
