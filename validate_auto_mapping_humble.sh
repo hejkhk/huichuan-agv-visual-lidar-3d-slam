@@ -465,8 +465,19 @@ localization_launch = (
 dual_launch = (
     root / "launch" / "dual_resolution_3d_slam.launch.py"
 ).read_text(encoding="utf-8")
-if "-start_trajectory_with_default_topics=false" not in localization_launch:
-    raise SystemExit("localization must defer the active trajectory until matching")
+if "-start_trajectory_with_default_topics=true" not in localization_launch:
+    raise SystemExit(
+        "localization must start the wide PBStream bootstrap trajectory")
+bootstrap_config = (
+    root / "config" / "cartographer_2d_bootstrap_localization.lua"
+).read_text(encoding="utf-8")
+for required in (
+        "pure_localization_trimmer",
+        "fast_correlative_scan_matcher.linear_search_window = 30.0",
+        "fast_correlative_scan_matcher.angular_search_window = math.pi"):
+    if required not in bootstrap_config:
+        raise SystemExit(
+            f"bootstrap global-localization contract missing: {required}")
 reloc = (root / "lidar_py" / "cartographer_reloc.py").read_text(encoding="utf-8")
 if "DeleteTrajectory" in reloc or "/delete_trajectory" in reloc:
     raise SystemExit("Humble relocalizer still references unavailable DeleteTrajectory")
