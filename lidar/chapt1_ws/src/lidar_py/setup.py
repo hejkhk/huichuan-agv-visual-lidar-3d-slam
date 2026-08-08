@@ -46,6 +46,7 @@ setup(
           os.path.join('config', 'cartographer_2d_v9_mapping_balanced.lua'),
           os.path.join('config', 'cartographer_2d_v9_nav_guarded.lua'),
           os.path.join('config', 'cartographer_2d_localization.lua'),
+          os.path.join('config', 'cartographer_2d_bootstrap_localization.lua'),
           os.path.join('config', 'frontier_auto_mapping_jazzy.yaml'),
           os.path.join('config', 'frontier_auto_mapping_humble.yaml'),
           os.path.join('config', 'nav2_auto_mapping_jazzy.yaml'),

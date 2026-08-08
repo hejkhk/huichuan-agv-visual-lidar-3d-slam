@@ -5,6 +5,7 @@ import math
 import pytest
 
 from lidar_py.relocalization_logic import (
+    BootstrapPoseGate,
     ImmutableCrcLock,
     PoseConsensus,
     occupancy_grid_crc,
@@ -54,7 +55,7 @@ def test_candidate_jump_resets_consensus():
     assert not result.ready
 
 
-def test_ambiguous_cluster_requires_six_stable_scans():
+def test_ambiguous_stationary_cluster_never_releases_localization():
     consensus = PoseConsensus(3, 0.35, math.radians(12.0), 6)
 
     results = [
@@ -76,7 +77,7 @@ def test_ambiguous_cluster_requires_six_stable_scans():
     ]
 
     assert not any(result.ready for result in results[:5])
-    assert results[-1].ready
+    assert not results[-1].ready
     assert consensus.active_required_count == 6
 
 
@@ -96,7 +97,7 @@ def test_pose_jump_starts_a_new_strict_consensus_cluster():
     assert consensus.active_required_count == 3
 
 
-def test_august_8_log_sequence_converges_after_early_candidate_jumps():
+def test_august_8_wrong_room_sequence_remains_locked():
     consensus = PoseConsensus(3, 0.35, math.radians(12.0), 6)
     observed = (
         (-0.54, -4.17, -143.5),
@@ -124,9 +125,47 @@ def test_august_8_log_sequence_converges_after_early_candidate_jumps():
     ]
 
     assert not any(result.ready for result in results[:-1])
-    assert results[-1].ready
+    assert not results[-1].ready
     assert results[-1].pose[0] == pytest.approx(2.31, abs=0.02)
     assert abs(abs(results[-1].pose[2]) - math.pi) < math.radians(1.0)
+
+
+def test_bootstrap_gate_accepts_stable_fresh_cartographer_pose():
+    gate = BootstrapPoseGate(
+        0.55, 2.0, 5, 0.20, math.radians(5.0))
+
+    results = [
+        gate.observe(
+            1.20 + offset,
+            -0.80,
+            math.radians(12.0 + yaw_offset),
+            index * 100,
+            index * 0.5,
+            0.72,
+        )
+        for index, (offset, yaw_offset) in enumerate(
+            ((0.00, 0.0), (0.02, 0.2), (-0.01, -0.1),
+             (0.01, 0.1), (0.00, 0.0)),
+            start=1,
+        )
+    ]
+
+    assert not any(result.ready for result in results[:-1])
+    assert results[-1].ready
+    assert results[-1].pose[0] == pytest.approx(1.204, abs=0.01)
+
+
+def test_bootstrap_gate_resets_on_pose_jump_or_weak_score():
+    gate = BootstrapPoseGate(
+        0.55, 1.0, 3, 0.20, math.radians(5.0))
+    gate.observe(1.0, 2.0, 0.0, 100, 0.0, 0.70)
+    jumped = gate.observe(3.0, 2.0, 0.0, 200, 0.5, 0.70)
+    weak = gate.observe(3.0, 2.0, 0.0, 300, 1.0, 0.40)
+
+    assert jumped.reset
+    assert jumped.count == 1
+    assert weak.reset
+    assert weak.count == 0
 
 
 def test_duplicate_scan_timestamp_does_not_increment_consensus():

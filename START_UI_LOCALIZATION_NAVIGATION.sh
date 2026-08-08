@@ -140,7 +140,10 @@ else
 fi
 
 export HUICHUAN_SLAM_ROOT="$ROOT_DIR"
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-88}"
+# The integrated launcher owns the ROS graph. Do not inherit an unrelated
+# shell domain (the August 8 failure inherited 99 while the stack used 88).
+export HUICHUAN_ROS_DOMAIN_ID="${HUICHUAN_ROS_DOMAIN_ID:-88}"
+export ROS_DOMAIN_ID="$HUICHUAN_ROS_DOMAIN_ID"
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 DDS_CONFIG="$ROOT_DIR/visual_laser_slam/cyclonedds_dual_3d.xml"
 [ -f "$DDS_CONFIG" ] || die "Missing CycloneDDS config: $DDS_CONFIG"

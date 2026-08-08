@@ -34,6 +34,7 @@ from std_msgs.msg import Bool, String
 from tf2_ros import Buffer, TransformListener
 
 from .relocalization_logic import (
+    BootstrapPoseGate,
     ImmutableCrcLock,
     PoseConsensus,
     occupancy_grid_crc,
@@ -94,6 +95,12 @@ class CartographerRelocalizer(Node):
         self.declare_parameter("consensus_yaw_deg", 12.0)
         self.declare_parameter("verify_expected_translation_m", 0.50)
         self.declare_parameter("verify_expected_yaw_deg", 20.0)
+        self.declare_parameter("bootstrap_enabled", True)
+        self.declare_parameter("bootstrap_min_match_score", 0.55)
+        self.declare_parameter("bootstrap_hold_sec", 4.0)
+        self.declare_parameter("bootstrap_min_observations", 8)
+        self.declare_parameter("bootstrap_max_translation_delta_m", 0.20)
+        self.declare_parameter("bootstrap_max_yaw_delta_deg", 5.0)
 
         self.map_topic = str(self.get_parameter("map_topic").value)
         self.scan_topic = str(self.get_parameter("scan_topic").value)
@@ -170,6 +177,17 @@ class CartographerRelocalizer(Node):
                 self.get_parameter("consensus_yaw_deg").value)),
             self.ambiguous_consensus_required_scans,
         )
+        self.bootstrap_enabled = bool(
+            self.get_parameter("bootstrap_enabled").value)
+        self.bootstrap_gate = BootstrapPoseGate(
+            float(self.get_parameter("bootstrap_min_match_score").value),
+            float(self.get_parameter("bootstrap_hold_sec").value),
+            int(self.get_parameter("bootstrap_min_observations").value),
+            float(self.get_parameter(
+                "bootstrap_max_translation_delta_m").value),
+            math.radians(float(self.get_parameter(
+                "bootstrap_max_yaw_delta_deg").value)),
+        )
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -238,6 +256,7 @@ class CartographerRelocalizer(Node):
         self.reference_trajectory_id = None
         self.search_attempts = 0
         self.next_search_at = 0.0
+        self.bootstrap_completed = not self.bootstrap_enabled
         self._last_logged_state = None
 
         self._publish_ready(False)
@@ -332,6 +351,10 @@ class CartographerRelocalizer(Node):
         if self.state == "verifying":
             self._verify_pose()
             return
+        if (self.bootstrap_enabled and not self.bootstrap_completed
+                and not self.manual_request):
+            self._bootstrap_tick()
+            return
         if not self.pending_search or self.busy:
             return
         if time.monotonic() < self.next_search_at:
@@ -367,6 +390,100 @@ class CartographerRelocalizer(Node):
                 f"start={self.start_client.service_is_ready()}")
             return
         self._start_search()
+
+    def _bootstrap_tick(self):
+        """Validate Cartographer's organic PBStream localization."""
+
+        if time.monotonic() - self.started_at > self.max_wait_sec:
+            self._fail("Cartographer bootstrap localization timed out")
+            return
+        if self.map_msg is None or self.score_grid is None:
+            self.state = "bootstrap_wait_map"
+            self.detail = self.map_topic
+            return
+        if self.latest_scan is None:
+            self.state = "bootstrap_wait_scan"
+            self.detail = self.scan_topic
+            return
+        if self.stationary_since is None or (
+                time.monotonic() - self.stationary_since
+                < self.stationary_hold_sec):
+            self.bootstrap_gate.reset()
+            self.state = "bootstrap_wait_stop"
+            self.detail = "hold the vehicle still during startup localization"
+            return
+        if not (self.states_client.service_is_ready()
+                and self.finish_client.service_is_ready()
+                and self.start_client.service_is_ready()):
+            self.state = "bootstrap_wait_cartographer"
+            self.detail = "waiting for trajectory services"
+            return
+        points = self._scan_points_in_base()
+        if points is None:
+            self.state = "bootstrap_wait_scan"
+            return
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                "map", self.base_frame, rclpy.time.Time())
+        except Exception as exc:
+            self.state = "bootstrap_wait_tf"
+            self.detail = f"map TF unavailable: {exc}"
+            return
+
+        stamp_ns = (
+            transform.header.stamp.sec * 1000000000
+            + transform.header.stamp.nanosec)
+        now_ns = self.get_clock().now().nanoseconds
+        age_sec = (now_ns - stamp_ns) / 1e9 if stamp_ns > 0 else float("inf")
+        if stamp_ns <= 0 or age_sec < -0.10 or age_sec > self.max_verify_tf_age_sec:
+            self.bootstrap_gate.reset()
+            self.state = "bootstrap_wait_tf"
+            self.detail = f"waiting for fresh map TF: age={age_sec:.3f}s"
+            return
+
+        q = transform.transform.rotation
+        yaw = math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        msg = self.map_msg
+        row = int(round((transform.transform.translation.y
+                         - msg.info.origin.position.y) / msg.info.resolution))
+        col = int(round((transform.transform.translation.x
+                         - msg.info.origin.position.x) / msg.info.resolution))
+        score = self._score_pose(
+            points[0], points[1], row, col, yaw, msg.info.resolution,
+            msg.info.height, msg.info.width)
+        self.best_score = score
+        result = self.bootstrap_gate.observe(
+            transform.transform.translation.x,
+            transform.transform.translation.y,
+            yaw,
+            stamp_ns,
+            time.monotonic(),
+            score,
+        )
+        self.state = "bootstrap_stabilizing"
+        reset_text = " reset after pose/score change;" if result.reset else ""
+        self.detail = (
+            f"{reset_text} score={score:.3f} stable={result.count}/"
+            f"{self.bootstrap_gate.min_observations} "
+            f"hold={result.duration_sec:.1f}/{self.bootstrap_gate.hold_sec:.1f}s")
+        if not result.ready:
+            return
+
+        mean_pose = result.pose
+        self.expected_pose = self._pose(*mean_pose)
+        self.bootstrap_completed = True
+        self.busy = True
+        self.pending_search = False
+        self.state = "restarting_trajectory"
+        self.detail = (
+            "Cartographer bootstrap verified; switching to tight tracking "
+            f"pose=({mean_pose[0]:.2f},{mean_pose[1]:.2f},"
+            f"{math.degrees(mean_pose[2]):.1f}deg) score={score:.3f}")
+        self.get_logger().info(f"BOOTSTRAP_LOCALIZATION_ACCEPTED {self.detail}")
+        future = self.states_client.call_async(GetTrajectoryStates.Request())
+        future.add_done_callback(self._on_states)
 
     def _build_score_grid(self):
         try:
@@ -485,6 +602,15 @@ class CartographerRelocalizer(Node):
             self.busy = False
             self.pending_search = True
             self.next_search_at = time.monotonic() + self.auto_retry_interval_sec
+            if (self.consensus.requires_extended
+                    and consensus.count >= self.consensus.active_required_count):
+                self.pending_search = False
+                self.state = "failed"
+                self.detail = (
+                    "stationary scan remains ambiguous after repeated "
+                    "observations; move to a distinctive location and retry")
+                self._publish_ready(False)
+                return
             self.state = "consensus_wait"
             reset_text = " candidate jump reset consensus;" if consensus.reset else ""
             self.detail = (

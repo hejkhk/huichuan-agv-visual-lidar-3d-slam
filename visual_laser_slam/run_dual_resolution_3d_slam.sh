@@ -381,7 +381,7 @@ RVIZ_CONFIG_FILE="${DUAL_3D_RVIZ_CONFIG_FILE:-$SOURCE_WS/src/lidar_py/rviz/dual_
 # its frozen-map profile and continuous scan-to-map correction.
 if is_true "$ENABLE_NAVIGATION"; then
   if is_true "$LOCALIZATION_MODE"; then
-    CARTOGRAPHER_CONFIG="cartographer_2d_localization.lua"
+    CARTOGRAPHER_CONFIG="cartographer_2d_bootstrap_localization.lua"
   else
     CARTOGRAPHER_CONFIG="${DUAL_3D_CARTOGRAPHER_CONFIG:-cartographer_2d_v9_mapping_balanced.lua}"
   fi

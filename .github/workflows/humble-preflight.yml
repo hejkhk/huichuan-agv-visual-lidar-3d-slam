@@ -42,6 +42,7 @@ jobs:
             python3-empy \
             python3-lark \
             python3-pip \
+            python3-pytest \
             python3-rosdep \
             python3-yaml
           rosdep update
@@ -52,6 +53,15 @@ jobs:
       - name: Build and validate Humble stack
         shell: bash
         run: ./validate_auto_mapping_humble.sh --build
+
+      - name: Run relocalization regression tests
+        shell: bash
+        env:
+          PYTHONPATH: lidar/chapt1_ws/src/lidar_py
+        run: |
+          python3 -m pytest -q \
+            lidar/chapt1_ws/src/lidar_py/test/test_relocalization_logic.py \
+            lidar/chapt1_ws/src/lidar_py/test/test_integration_contracts.py
 
       - name: Build web console
         uses: actions/setup-node@v4

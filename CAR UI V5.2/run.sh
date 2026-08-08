@@ -20,8 +20,12 @@ if [[ -n "${HUICHUAN_SLAM_ROOT:-}" ]]; then
     export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
     export CYCLONEDDS_URI="${DUAL_3D_CYCLONEDDS_URI:-file://$DDS_CONFIG}"
   fi
+  # An integrated UI must share the project's graph even when the terminal
+  # previously exported another domain.
+  export ROS_DOMAIN_ID="${HUICHUAN_ROS_DOMAIN_ID:-88}"
+else
+  export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-88}"
 fi
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-88}"
 export ROBOT_UI_MAP_TOPIC="${ROBOT_UI_MAP_TOPIC:-/map}"
 export ROBOT_UI_PROJECT_ROOT="${ROBOT_UI_PROJECT_ROOT:-${HUICHUAN_SLAM_ROOT:-$UI_ROOT}}"
 

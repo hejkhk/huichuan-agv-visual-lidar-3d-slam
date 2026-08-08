@@ -232,7 +232,7 @@ def generate_launch_description():
             "-configuration_directory", config_dir,
             "-configuration_basename", cartographer_config,
             "-load_state_filename", cartographer_load_state_filename,
-            "-start_trajectory_with_default_topics=false",
+            "-start_trajectory_with_default_topics=true",
         ],
         condition=IfCondition(PythonExpression([
             "'", cartographer_load_state_filename, "' != ''"

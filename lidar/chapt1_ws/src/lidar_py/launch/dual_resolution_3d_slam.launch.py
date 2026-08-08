@@ -349,6 +349,7 @@ def generate_launch_description():
             "laser_frame": "laser_frame",
             "configuration_directory": os.path.join(pkg_dir, "config"),
             "configuration_basename": "cartographer_2d_localization.lua",
+            "bootstrap_enabled": True,
             # A single scan cannot safely distinguish two similar corridor
             # locations. Reject an ambiguous match instead of starting a
             # trajectory at the wrong copy of the corridor.
@@ -366,11 +367,16 @@ def generate_launch_description():
             "max_verify_tf_age_sec": 0.75,
             "min_verify_tf_advance_sec": 0.50,
             "verify_timeout_sec": 8.0,
-            "auto_retry_interval_sec": 0.85,
+            "auto_retry_interval_sec": 5.0,
             # Keep the strict corridor-ambiguity gate, but do not give up
             # after only ~20 seconds of noisy startup scans.
-            "max_auto_attempts": 30,
+            "max_auto_attempts": 5,
             "max_wait_sec": 180.0,
+            "bootstrap_min_match_score": 0.55,
+            "bootstrap_hold_sec": 4.0,
+            "bootstrap_min_observations": 8,
+            "bootstrap_max_translation_delta_m": 0.20,
+            "bootstrap_max_yaw_delta_deg": 5.0,
         }],
     )
 
@@ -533,7 +539,10 @@ def generate_launch_description():
             "ground_filter_enabled": typed("local_ground_filter", bool),
             "ground_z_min": typed("local_ground_z_min", float),
             "ground_z_max": typed("local_ground_z_max", float),
-            "adaptive_ground_plane": True,
+            # The calibrated cloud is already in base_link. Adaptive fitting
+            # drifted to a 0.05 slope in the August 8 run and promoted floor
+            # returns into STVL obstacles, so navigation uses the fixed band.
+            "adaptive_ground_plane": False,
             "ground_plane_candidate_min_z": -0.12,
             "ground_plane_candidate_max_z": 0.10,
             "ground_plane_fit_tolerance": 0.025,

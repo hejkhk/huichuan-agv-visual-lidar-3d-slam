@@ -117,6 +117,7 @@ for file in \
   "$LIDAR_SRC/launch/dual_resolution_3d_slam.launch.py" \
   "$LIDAR_SRC/launch/cartographer_scan_v2_localization_launch.py" \
   "$LIDAR_SRC/config/cartographer_2d_localization.lua" \
+  "$LIDAR_SRC/config/cartographer_2d_bootstrap_localization.lua" \
   "$LIDAR_SRC/lidar_py/cartographer_reloc.py" \
   "$LIDAR_SRC/lidar_py/relocalization_logic.py" \
   "$LIDAR_SRC/lidar_py/localization_bringup.py" \
@@ -127,6 +128,7 @@ for file in \
   "$ROOT_DIR/lidar/chapt1_ws/src/short_goal_bt/src/dynamic_spin_action.cpp" \
   "$LOCAL_DEPTH_SRC/src/mutable_navigation_map_node.cpp" \
   "$LIDAR_SRC/rviz/dual_resolution_3d_localization.rviz" \
+  "$LIDAR_SRC/urdf/agv_box.urdf.xacro" \
   "$ROOT_DIR/lidar/chapt1_ws/src/reloc_rviz_panel/reloc_panel_plugin.xml" \
   "$LIDAR_SRC/config/nav2_auto_mapping_humble.yaml" \
   "$LIDAR_SRC/config/nav2_dual_3d_dwb_humble_override.yaml" \
@@ -138,6 +140,7 @@ for file in \
   "$LIDAR_SRC/behavior_trees/navigate_to_pose_all_beifen_humble.xml" \
   "$LIDAR_SRC/behavior_trees/navigate_through_poses_all_beifen_humble.xml" \
   "$ROOT_DIR/START_UI_LOCALIZATION_NAVIGATION.sh" \
+  "$ROOT_DIR/CAR UI V5.2/run.sh" \
   "$ROOT_DIR/CAR UI V5.2/main.py" \
   "$ROOT_DIR/CAR UI V5.2/backend/map_preview.py" \
   "$ROOT_DIR/CAR UI V5.2/backend/map_manager.py" \
@@ -521,16 +524,22 @@ for required in (
     if required not in reloc:
         raise SystemExit(
             f"startup relocalizer freshness contract missing: {required}")
-if "retry_wait" not in reloc or "max_auto_attempts" not in reloc:
-    raise SystemExit("startup relocalizer is missing bounded automatic retries")
-if '"max_auto_attempts": 30' not in dual_launch:
-    raise SystemExit("startup relocalizer retry budget regressed below the Jetson profile")
 for required in (
-        '"ambiguous_match_min_score": 0.76',
-        '"ambiguous_consensus_required_scans": 6'):
+        "BootstrapPoseGate",
+        "BOOTSTRAP_LOCALIZATION_ACCEPTED",
+        "stationary scan remains ambiguous"):
+    if required not in reloc:
+        raise SystemExit(
+            f"Cartographer bootstrap localization contract missing: {required}")
+for required in (
+        '"bootstrap_enabled": True',
+        '"bootstrap_min_match_score": 0.55',
+        '"adaptive_ground_plane": False'):
     if required not in dual_launch:
         raise SystemExit(
-            f"stable ambiguous relocalization fallback missing: {required}")
+            f"stable localization/perception launch contract missing: {required}")
+if "cartographer_2d_bootstrap_localization.lua" not in runner:
+    raise SystemExit("localization must start with the wide PBStream bootstrap profile")
 if "wait_topic /cartographer_pose_odom 30" not in runner:
     raise SystemExit("mapping launcher must still verify Cartographer corrected pose")
 for required in (

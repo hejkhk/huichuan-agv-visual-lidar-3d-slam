@@ -1280,7 +1280,8 @@ pgrep -af 'brltty|ModemManager'
 
 当前选择记录在 `~/.cache/huichuan_agv/selected_map`；运行中的地图记录在
 `~/.cache/huichuan_agv/active_map`。UI 仍只通过 ROS 2 接入，STM32 串口继续由
-`chassis_node` 独占。
+`chassis_node` 独占。联合启动器固定使用项目域 `88`，不会继承终端里遗留的其他
+`ROS_DOMAIN_ID`；确需改域时统一设置 `HUICHUAN_ROS_DOMAIN_ID`。
 
 安装 Humble 的 RTAB-Map、robot_localization、Nav2 DWB 和 C++ STVL：
 
@@ -1415,10 +1416,13 @@ sudo apt install python3-scipy
 只供启动/手动重定位、UI 和原图审计使用。动态雷达证据单独发布到
 `/navigation_live_map` 与 `/navigation_live_map_updates`，仅由 Nav2 使用，永远不会回写或
 参与重定位参考。随后加载同会话的 PBSTREAM 作为 Cartographer 冻结地图，使用当前 2D 雷达
-进行全局扫描匹配。单帧候选具有足够唯一性时仍需连续 3 个不同雷达帧一致；相似房间使
-第二候选分数接近时，只有最高分候选连续 6 帧保持在 `0.35 m/12 deg` 内才允许继续，并且
-新 Cartographer 轨迹还要再次验证该位姿。验证完成后才激活 Nav2 并解除主机运动锁；失败时
-车辆保持不动，RViz 面板会显示原因。
+进行全局扫描匹配。启动阶段先运行
+`cartographer_2d_bootstrap_localization.lua`：它使用与 `all.beifen` 一致的 `30 m / +/-pi`
+宽搜索，由 Cartographer 对冻结 PBSTREAM 做全局定位。只有新鲜 TF、扫描匹配分数以及连续
+`4 秒`的稳定位置同时通过，系统才结束启动轨迹，并在已验证位姿上启动
+`cartographer_2d_localization.lua` 窄窗口跟踪。相似房间中即使静止重复扫描得到相同候选，
+也不能再直接解除定位锁。验证完成后才激活 Nav2 并解除主机运动锁；失败时车辆保持不动，
+RViz 面板会显示原因。
 
 `Verified Relocalization` 面板只存在于这个启动版本。运行中需要重新定位时，先停车再点
 `Relocalize`；Nav2 会暂停，成功后恢复。系统不会在正常行驶中自行触发重定位或重启轨迹。
@@ -1432,6 +1436,10 @@ STVL、长期视觉墙、最终碰撞门和底盘安全链路均继续运行。
 `cartographer_2d_localization.lua` 同步了相同的在线回环约束：局部匹配窗口保持
 `0.06 m/2 deg`，跨子图匹配限制为 `1.5 m/3 deg`。重定位版仍额外保留冻结 PBSTREAM
 和最多 `5` 个活动子图，因此不是重新建一张互不相干的地图，而是在旧图约束下持续纠正当前位姿。
+
+正常启动日志应依次出现 `BOOTSTRAP_LOCALIZATION_ACCEPTED`、`starting_trajectory` 和
+`Localization verified; Nav2 may start`。在相似区域无法确定位置时不会猜测，应将车辆保持
+静止并移到具有门洞、拐角等明显结构的位置后，通过 RViz 面板重新触发。
 
 运行中若 Cartographer 更新 `map -> odom` 超过瞬时 `0.20 m/5 deg`，或在 `0.5 秒`内累计
 超过 `0.30 m/6 deg`，`slam_correction_guard` 才会把它判为真实跳变并锁住零速度 `1 秒`。
