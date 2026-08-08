@@ -513,6 +513,7 @@ for required in (
             f"localization bringup lost the in-process motion gate: {required}")
 runner = (root.parents[3] / "visual_laser_slam" / "run_dual_resolution_3d_slam.sh").read_text(encoding="utf-8")
 for required in (
+        'LOCAL_CLOUD_PIPELINE_VERSION="v6.35"',
         'fixed_scan_min_raw_points:=${FIXED_SCAN_MIN_RAW_POINTS:-180}',
         'fixed_scan_min_valid_points:=${FIXED_SCAN_MIN_VALID_POINTS:-0}',
         'RGBD_SYNC_WARN_P95_MS:-45.0'):

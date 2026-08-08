@@ -475,7 +475,7 @@ for contract in (
     "CARTOGRAPHER_ODOM_TOPIC=/odometry/filtered",
     "RTABMAP_ODOM_TOPIC=/cartographer_pose_odom",
     "check_pkg nav2_rviz_plugins",
-    'LOCAL_CLOUD_PIPELINE_VERSION="v6.34"',
+    'LOCAL_CLOUD_PIPELINE_VERSION="v6.35"',
     "reset_cached_package local_depth_cloud_cpp",
     "require_system_ready_for_motion:=$ENABLE_NAVIGATION",
     "navi_motion_watchdog_pose_enabled:",

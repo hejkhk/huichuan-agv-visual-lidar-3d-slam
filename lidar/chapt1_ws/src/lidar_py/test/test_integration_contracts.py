@@ -53,3 +53,17 @@ def test_navigation_cloud_uses_fixed_calibrated_ground_band():
     assert '"adaptive_ground_plane": False' in launch
     assert '"ground_z_min": typed("local_ground_z_min", float)' in launch
     assert '"ground_z_max": typed("local_ground_z_max", float)' in launch
+
+
+def test_local_cloud_binary_and_launcher_use_same_pipeline_version():
+    runner = (
+        PROJECT_ROOT / "visual_laser_slam/run_dual_resolution_3d_slam.sh"
+    ).read_text(encoding="utf-8")
+    source = (
+        PROJECT_ROOT
+        / "lidar/chapt1_ws/src/local_depth_cloud_cpp/src/"
+          "depth_image_to_local_cloud_v21_node.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert 'LOCAL_CLOUD_PIPELINE_VERSION="v6.35"' in runner
+    assert 'constexpr char kPipelineVersion[] = "v6.35"' in source
