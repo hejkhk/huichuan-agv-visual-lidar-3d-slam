@@ -3,10 +3,13 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 import struct
+import threading
 
 import yaml
 
 from backend.map_preview import load_saved_map_preview, map_signature
+from robot_api.team import TeamRobotApi
+from robot_api.types import RobotSnapshot
 
 
 def _write_map(directory: Path) -> Path:
@@ -65,3 +68,24 @@ def test_map_signature_normalizes_ros_float32_resolution():
     from_ros = map_signature([0, 100], 2, 1, ros_resolution, -1.5, 2.0)
 
     assert from_yaml == from_ros
+
+
+def test_filesystem_preview_does_not_impersonate_ros_connection():
+    api = TeamRobotApi.__new__(TeamRobotApi)
+    api._snapshot_lock = threading.RLock()
+    api.snapshot = RobotSnapshot()
+
+    api.update_map(
+        {
+            "map_image": "data:image/png;base64,AA==",
+            "map_width": 2,
+            "map_height": 1,
+            "map_revision": 1,
+        },
+        ros_source=False,
+    )
+
+    assert api.snapshot.map_available
+    assert not api.snapshot.ros_connected
+    api.update_ros_connection(True)
+    assert api.snapshot.ros_connected

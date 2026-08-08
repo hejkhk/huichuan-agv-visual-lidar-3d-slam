@@ -30,8 +30,10 @@ try:
     from std_msgs.msg import Bool, Float32, String
     from nav2_msgs.action import NavigateThroughPoses, NavigateToPose
     _HAS_RCLPY = True
-except ImportError:
+    _RCLPY_IMPORT_ERROR = None
+except ImportError as exc:
     _HAS_RCLPY = False
+    _RCLPY_IMPORT_ERROR = exc
 
 
 def quaternion_to_yaw(x: float, y: float, z: float, w: float) -> float:
@@ -52,6 +54,11 @@ class Ros2Client:
     """
 
     def __init__(self, owner: Any):
+        if not _HAS_RCLPY:
+            raise RuntimeError(
+                "ROS 2 Python imports are unavailable: "
+                f"{_RCLPY_IMPORT_ERROR}"
+            )
         self.owner = owner
         self.log = logging.getLogger("ROS")
         self.context = Context()
@@ -64,6 +71,9 @@ class Ros2Client:
         self._map_topic = os.getenv("ROBOT_UI_MAP_TOPIC", "/map")
         self._map_message_count = 0
         self._last_map_diagnostic_state: tuple[int, int] | None = None
+        self._last_graph_diagnostic_state: tuple[int, int, int] | None = None
+        self._empty_graph_checks = 0
+        self._started_at = time.monotonic()
 
         # --- Map: /map (latched, from map_server) ---
         map_qos = QoSProfile(
@@ -218,10 +228,54 @@ class Ros2Client:
         self._map_diagnostic_timer = self.node.create_timer(
             5.0, self._report_map_subscription
         )
+        self._graph_diagnostic_timer = self.node.create_timer(
+            2.0, self._report_ros_graph
+        )
 
         self.thread = threading.Thread(target=self._spin, name="robot-ui-ros2", daemon=True)
         self.thread.start()
         self.log.info("ROS 2 订阅已启动")
+
+    def _report_ros_graph(self) -> None:
+        map_publishers = self.node.count_publishers(self._map_topic)
+        scan_topic = os.getenv(
+            "ROBOT_UI_SCAN_TOPIC", "/scan_timed_v2_filtered"
+        )
+        odom_topic = os.getenv("ROBOT_UI_ODOM_TOPIC", "/odom")
+        scan_publishers = self.node.count_publishers(scan_topic)
+        odom_publishers = self.node.count_publishers(odom_topic)
+        state = (
+            int(map_publishers),
+            int(scan_publishers),
+            int(odom_publishers),
+        )
+        graph_connected = any(state)
+        if graph_connected:
+            self._empty_graph_checks = 0
+            self.owner.update_ros_connection(True)
+        else:
+            self._empty_graph_checks += 1
+            if (
+                self._empty_graph_checks >= 3
+                and time.monotonic() - self._started_at >= 8.0
+            ):
+                self.owner.update_ros_connection(
+                    False,
+                    "DDS 未发现 /map、/scan_timed_v2_filtered 或 /odom 发布者",
+                )
+        if state == self._last_graph_diagnostic_state:
+            return
+        self._last_graph_diagnostic_state = state
+        log_method = self.log.info if graph_connected else self.log.warning
+        log_method(
+            "ROS_GRAPH_HEALTH map=%d scan=%d odom=%d domain=%s rmw=%s dds=%s",
+            map_publishers,
+            scan_publishers,
+            odom_publishers,
+            os.getenv("ROS_DOMAIN_ID", "unset"),
+            os.getenv("RMW_IMPLEMENTATION", "default"),
+            os.getenv("CYCLONEDDS_URI", "unset"),
+        )
 
     def _spin(self) -> None:
         try:

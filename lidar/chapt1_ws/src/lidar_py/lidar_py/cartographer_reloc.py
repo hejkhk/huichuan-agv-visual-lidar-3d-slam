@@ -73,6 +73,8 @@ class CartographerRelocalizer(Node):
         self.declare_parameter("min_score_margin", 0.018)
         self.declare_parameter("strong_match_score", 0.75)
         self.declare_parameter("strong_match_min_margin", 0.012)
+        self.declare_parameter("ambiguous_match_min_score", 0.75)
+        self.declare_parameter("ambiguous_consensus_required_scans", 6)
         self.declare_parameter("auto_retry_interval_sec", 5.0)
         self.declare_parameter("max_auto_attempts", 5)
         self.declare_parameter("max_wait_sec", 120.0)
@@ -121,6 +123,15 @@ class CartographerRelocalizer(Node):
             self.get_parameter("strong_match_score").value)
         self.strong_match_min_margin = float(
             self.get_parameter("strong_match_min_margin").value)
+        self.ambiguous_match_min_score = max(
+            self.min_score,
+            float(self.get_parameter("ambiguous_match_min_score").value),
+        )
+        self.ambiguous_consensus_required_scans = max(
+            4,
+            int(self.get_parameter(
+                "ambiguous_consensus_required_scans").value),
+        )
         self.auto_retry_interval_sec = max(0.25, float(
             self.get_parameter("auto_retry_interval_sec").value))
         self.max_auto_attempts = max(
@@ -157,6 +168,7 @@ class CartographerRelocalizer(Node):
             float(self.get_parameter("consensus_translation_m").value),
             math.radians(float(
                 self.get_parameter("consensus_yaw_deg").value)),
+            self.ambiguous_consensus_required_scans,
         )
 
         self.tf_buffer = Buffer()
@@ -422,7 +434,7 @@ class CartographerRelocalizer(Node):
         self.state = "searching"
         self.detail = "global scan-to-map search"
         self._publish_state()
-        pose, best, second = self._global_match(*points)
+        pose, best, second, match_mode = self._global_match(*points)
         self.best_score = best
         self.second_score = second
         if pose is None:
@@ -453,7 +465,15 @@ class CartographerRelocalizer(Node):
         scan_stamp_ns = self._scan_stamp_ns(self.latest_scan)
         yaw = quaternion_yaw(pose.orientation)
         consensus = self.consensus.observe(
-            pose.position.x, pose.position.y, yaw, scan_stamp_ns)
+            pose.position.x,
+            pose.position.y,
+            yaw,
+            scan_stamp_ns,
+            extended=match_mode == "temporal",
+        )
+        consensus_mode = (
+            "temporal" if self.consensus.requires_extended else "strict"
+        )
         if consensus.duplicate:
             self.busy = False
             self.pending_search = True
@@ -469,7 +489,8 @@ class CartographerRelocalizer(Node):
             reset_text = " candidate jump reset consensus;" if consensus.reset else ""
             self.detail = (
                 f"{reset_text} stable matches={consensus.count}/"
-                f"{self.consensus.required_count} pose="
+                f"{self.consensus.active_required_count} "
+                f"mode={consensus_mode} pose="
                 f"({consensus.pose[0]:.2f},{consensus.pose[1]:.2f},"
                 f"{math.degrees(consensus.pose[2]):.1f}deg)")
             self.get_logger().info(f"RELOCALIZATION_CONSENSUS {self.detail}")
@@ -479,7 +500,8 @@ class CartographerRelocalizer(Node):
         self.expected_pose = self._pose(*mean_pose)
         self.get_logger().info(
             "RELOCALIZATION_CONSENSUS accepted "
-            f"{consensus.count}/{self.consensus.required_count} distinct scans "
+            f"{consensus.count}/{self.consensus.active_required_count} "
+            f"distinct scans mode={consensus_mode} "
             f"pose=({mean_pose[0]:.2f},{mean_pose[1]:.2f},"
             f"{math.degrees(mean_pose[2]):.1f}deg)")
         if self._keep_healthy_manual_trajectory(self.expected_pose):
@@ -501,7 +523,7 @@ class CartographerRelocalizer(Node):
         if abs(origin_yaw) > 1e-3:
             self.get_logger().warn(
                 "Rotated OccupancyGrid origins are not supported")
-            return None, 0.0, 0.0
+            return None, 0.0, 0.0, "rejected"
 
         rows = np.arange(0, height, self.coarse_step, dtype=np.int32)
         cols = np.arange(0, width, self.coarse_step, dtype=np.int32)
@@ -512,7 +534,7 @@ class CartographerRelocalizer(Node):
         candidate_r = candidate_r[free]
         candidate_c = candidate_c[free]
         if candidate_r.size == 0:
-            return None, 0.0, 0.0
+            return None, 0.0, 0.0, "rejected"
 
         results = []
         yaw_values = np.arange(-math.pi, math.pi, self.yaw_step)
@@ -546,7 +568,7 @@ class CartographerRelocalizer(Node):
                                 int(cr[index]), int(cc[index]), float(yaw)))
 
         if not results:
-            return None, 0.0, 0.0
+            return None, 0.0, 0.0, "rejected"
         refined = refine_distinct_candidates(
             results,
             lambda seed: self._refine_match(bx, by, seed, resolution),
@@ -556,7 +578,7 @@ class CartographerRelocalizer(Node):
             self.max_refined_candidates,
         )
         if not refined:
-            return None, 0.0, 0.0
+            return None, 0.0, 0.0, "rejected"
         best = refined[0]
         second_candidate = refined[1] if len(refined) > 1 else None
         second = second_candidate[0] if second_candidate is not None else 0.0
@@ -580,13 +602,19 @@ class CartographerRelocalizer(Node):
         strong_match = (
             score >= self.strong_match_score
             and margin >= self.strong_match_min_margin)
-        if not (normal_match or strong_match):
-            return None, score, second
-        if strong_match and not normal_match:
+        if normal_match or strong_match:
+            if strong_match and not normal_match:
+                self.get_logger().warn(
+                    "Accepting high-confidence match through strong-score gate: "
+                    f"score={score:.3f} margin={margin:.3f}")
+            return self._pose(best_x, best_y, yaw), score, second, "strict"
+        if score >= self.ambiguous_match_min_score:
             self.get_logger().warn(
-                "Accepting high-confidence match through strong-score gate: "
-                f"score={score:.3f} margin={margin:.3f}")
-        return self._pose(best_x, best_y, yaw), score, second
+                "Ambiguous high-score match admitted to extended temporal "
+                f"consensus only: score={score:.3f} margin={margin:.3f} "
+                f"required_scans={self.ambiguous_consensus_required_scans}")
+            return self._pose(best_x, best_y, yaw), score, second, "temporal"
+        return None, score, second, "rejected"
 
     def _keep_healthy_manual_trajectory(self, pose):
         """Avoid restarting Cartographer when a manual match confirms its pose."""

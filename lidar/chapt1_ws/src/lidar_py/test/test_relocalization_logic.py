@@ -54,6 +54,81 @@ def test_candidate_jump_resets_consensus():
     assert not result.ready
 
 
+def test_ambiguous_cluster_requires_six_stable_scans():
+    consensus = PoseConsensus(3, 0.35, math.radians(12.0), 6)
+
+    results = [
+        consensus.observe(
+            2.31,
+            -2.42 + offset,
+            math.pi + yaw_offset,
+            stamp,
+            extended=True,
+        )
+        for offset, yaw_offset, stamp in (
+            (0.00, 0.00, 100),
+            (-0.10, 0.01, 200),
+            (0.00, -0.01, 300),
+            (-0.05, 0.00, 400),
+            (0.00, 0.01, 500),
+            (-0.05, -0.01, 600),
+        )
+    ]
+
+    assert not any(result.ready for result in results[:5])
+    assert results[-1].ready
+    assert consensus.active_required_count == 6
+
+
+def test_pose_jump_starts_a_new_strict_consensus_cluster():
+    consensus = PoseConsensus(3, 0.35, math.radians(12.0), 6)
+    consensus.observe(8.0, 8.0, 1.0, 100, extended=True)
+    consensus.observe(8.1, 8.0, 1.0, 200, extended=True)
+
+    first = consensus.observe(2.0, -1.0, 0.0, 300)
+    second = consensus.observe(2.1, -1.0, 0.01, 400)
+    third = consensus.observe(2.0, -0.9, -0.01, 500)
+
+    assert first.reset
+    assert not first.ready
+    assert not second.ready
+    assert third.ready
+    assert consensus.active_required_count == 3
+
+
+def test_august_8_log_sequence_converges_after_early_candidate_jumps():
+    consensus = PoseConsensus(3, 0.35, math.radians(12.0), 6)
+    observed = (
+        (-0.54, -4.17, -143.5),
+        (-23.99, -1.12, 1.0),
+        (-2.44, -3.67, 17.0),
+        (2.31, -2.32, 177.5),
+        (-2.54, -0.77, -2.0),
+        (2.31, -2.42, -179.0),
+        (2.31, -2.52, -180.0),
+        (2.31, -2.42, -179.5),
+        (2.31, -2.47, -179.5),
+        (2.31, -2.42, -180.0),
+        (2.31, -2.42, -180.0),
+    )
+
+    results = [
+        consensus.observe(
+            x,
+            y,
+            math.radians(yaw_deg),
+            stamp * 100,
+            extended=True,
+        )
+        for stamp, (x, y, yaw_deg) in enumerate(observed, start=1)
+    ]
+
+    assert not any(result.ready for result in results[:-1])
+    assert results[-1].ready
+    assert results[-1].pose[0] == pytest.approx(2.31, abs=0.02)
+    assert abs(abs(results[-1].pose[2]) - math.pi) < math.radians(1.0)
+
+
 def test_duplicate_scan_timestamp_does_not_increment_consensus():
     consensus = PoseConsensus(3, 0.35, math.radians(12.0))
     consensus.observe(1.0, 2.0, 0.0, 100)

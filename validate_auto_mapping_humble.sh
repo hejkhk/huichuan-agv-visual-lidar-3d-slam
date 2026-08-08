@@ -516,7 +516,8 @@ for required in (
         "active_trajectory_confirmed", "max_verify_tf_age_sec",
         "min_verify_tf_advance_sec", "REFERENCE_MAP_LOCKED",
         "REFERENCE_MAP_MUTATION_REJECTED", "RELOCALIZATION_CONSENSUS",
-        "refine_distinct_candidates", "PoseConsensus"):
+        "refine_distinct_candidates", "PoseConsensus",
+        "ambiguous_match_min_score", "active_required_count"):
     if required not in reloc:
         raise SystemExit(
             f"startup relocalizer freshness contract missing: {required}")
@@ -524,6 +525,12 @@ if "retry_wait" not in reloc or "max_auto_attempts" not in reloc:
     raise SystemExit("startup relocalizer is missing bounded automatic retries")
 if '"max_auto_attempts": 30' not in dual_launch:
     raise SystemExit("startup relocalizer retry budget regressed below the Jetson profile")
+for required in (
+        '"ambiguous_match_min_score": 0.76',
+        '"ambiguous_consensus_required_scans": 6'):
+    if required not in dual_launch:
+        raise SystemExit(
+            f"stable ambiguous relocalization fallback missing: {required}")
 if "wait_topic /cartographer_pose_odom 30" not in runner:
     raise SystemExit("mapping launcher must still verify Cartographer corrected pose")
 for required in (

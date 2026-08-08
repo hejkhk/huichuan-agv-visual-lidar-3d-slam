@@ -257,7 +257,7 @@ class TeamRobotApi(MockRobotApi):
         self.reference_map_signature = signature
         with self._snapshot_lock:
             preview["map_revision"] = self.snapshot.map_revision + 1
-        self.update_map(preview)
+        self.update_map(preview, ros_source=False)
         self.log.info(
             "地图预览已加载：source=filesystem selected=%s yaml=%s size=%dx%d "
             "resolution=%.3f crc=%s decode=ok",
@@ -287,14 +287,33 @@ class TeamRobotApi(MockRobotApi):
     def stop_slam_system(self) -> ApiResult[None]:
         return self._stack.stop()
 
-    def update_map(self, payload: dict[str, Any]) -> None:
+    def update_map(
+        self,
+        payload: dict[str, Any],
+        *,
+        ros_source: bool = True,
+    ) -> None:
         with self._snapshot_lock:
             for key, value in payload.items():
                 setattr(self.snapshot, key, value)
             self.snapshot.map_available = True
-            self.snapshot.ros_connected = True
-            self.snapshot.ros_error = ""
-            self.snapshot.system_status = "ROS 已连接"
+            if ros_source:
+                self.snapshot.ros_connected = True
+                self.snapshot.ros_error = ""
+                self.snapshot.system_status = "ROS 已连接"
+
+    def update_ros_connection(self, connected: bool, detail: str = "") -> None:
+        """Publish ROS graph health independently from localization pose state."""
+
+        with self._snapshot_lock:
+            self.snapshot.ros_connected = bool(connected)
+            if connected:
+                self.snapshot.ros_error = ""
+                if not self.snapshot.pose_available:
+                    self.snapshot.system_status = "ROS 已连接，等待定位"
+            elif detail:
+                self.snapshot.ros_error = str(detail)
+                self.snapshot.system_status = "ROS 图未连接"
 
     def update_pose(self, x: float, y: float, yaw: float) -> None:
         with self._snapshot_lock:

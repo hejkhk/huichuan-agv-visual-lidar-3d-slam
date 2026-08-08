@@ -136,8 +136,13 @@ class PoseConsensus:
         required_count: int,
         translation_m: float,
         yaw_rad: float,
+        extended_required_count: int | None = None,
     ) -> None:
         self.required_count = max(2, int(required_count))
+        self.extended_required_count = max(
+            self.required_count,
+            int(extended_required_count or self.required_count),
+        )
         self.translation_m = max(0.01, float(translation_m))
         self.yaw_rad = max(math.radians(1.0), float(yaw_rad))
         self.reset()
@@ -151,6 +156,15 @@ class PoseConsensus:
         self.y_sum = 0.0
         self.sin_sum = 0.0
         self.cos_sum = 0.0
+        self.requires_extended = False
+
+    @property
+    def active_required_count(self) -> int:
+        """Return the evidence count required by the current pose cluster."""
+
+        if self.requires_extended:
+            return self.extended_required_count
+        return self.required_count
 
     @property
     def pose(self) -> tuple[float, float, float] | None:
@@ -165,7 +179,13 @@ class PoseConsensus:
         )
 
     def observe(
-        self, x: float, y: float, yaw: float, stamp_ns: int
+        self,
+        x: float,
+        y: float,
+        yaw: float,
+        stamp_ns: int,
+        *,
+        extended: bool = False,
     ) -> ConsensusResult:
         """Add one pose only when its scan timestamp and cluster are valid."""
 
@@ -173,7 +193,7 @@ class PoseConsensus:
         if self.last_stamp_ns == stamp_ns:
             return ConsensusResult(
                 self.count,
-                self.count >= self.required_count,
+                self.count >= self.active_required_count,
                 False,
                 True,
                 self.pose,
@@ -188,6 +208,7 @@ class PoseConsensus:
                 self.reset()
                 reset = True
 
+        self.requires_extended = self.requires_extended or bool(extended)
         self.count += 1
         self.last_stamp_ns = stamp_ns
         self.x_sum += float(x)
@@ -196,7 +217,7 @@ class PoseConsensus:
         self.cos_sum += math.cos(float(yaw))
         return ConsensusResult(
             self.count,
-            self.count >= self.required_count,
+            self.count >= self.active_required_count,
             reset,
             False,
             self.pose,

@@ -356,6 +356,11 @@ def generate_launch_description():
             "min_score_margin": 0.035,
             "strong_match_score": 0.90,
             "strong_match_min_margin": 0.035,
+            # Similar rooms can keep the per-frame runner-up close to the
+            # winner. Such a candidate may proceed only after six distinct
+            # scans keep selecting the same position/yaw cluster.
+            "ambiguous_match_min_score": 0.76,
+            "ambiguous_consensus_required_scans": 6,
             "max_scan_points": 180,
             "trajectory_restart_delay_sec": 1.0,
             "max_verify_tf_age_sec": 0.75,
