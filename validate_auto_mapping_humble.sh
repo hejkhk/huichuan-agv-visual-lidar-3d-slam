@@ -486,6 +486,22 @@ if "qos_profile_sensor_data" not in reloc:
 for service in ('"/get_trajectory_states"', '"/finish_trajectory"', '"/start_trajectory"'):
     if service not in reloc:
         raise SystemExit(f"Humble relocalizer uses the wrong Cartographer service path: {service}")
+for required in (
+        "BOOTSTRAP_DIRECT_FALLBACK", "bootstrap_fallback_due(",
+        "self.bootstrap_completed = True"):
+    if required not in reloc:
+        raise SystemExit(f"startup localization fallback contract missing: {required}")
+depth_cloud = (
+    root.parent / "local_depth_cloud_cpp" / "src" /
+    "depth_image_to_local_cloud_v21_node.cpp"
+).read_text(encoding="utf-8")
+for required in (
+        'constexpr char kPipelineVersion[] = "v6.35"',
+        "if (ground_filter_enabled_)",
+        "ground_plane_remove_above_ : ground_z_max_",
+        "residual > speckle_lower_bound"):
+    if required not in depth_cloud:
+        raise SystemExit(f"fixed-ground speckle filter contract missing: {required}")
 bringup = (root / "lidar_py" / "localization_bringup.py").read_text(encoding="utf-8")
 for required in (
         '"/robot/navigation_sensor_healthy"',
@@ -545,6 +561,7 @@ for required in (
 for required in (
         '"bootstrap_enabled": True',
         '"bootstrap_min_match_score": 0.55',
+        '"bootstrap_direct_fallback_sec": 8.0',
         '"adaptive_ground_plane": False'):
     if required not in dual_launch:
         raise SystemExit(

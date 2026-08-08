@@ -332,3 +332,26 @@ class BootstrapPoseGate:
         ready = self.count >= self.min_observations and duration >= self.hold_sec
         return BootstrapGateResult(
             self.count, ready, reset, False, duration, self.pose)
+
+
+def should_run_bootstrap(
+    enabled: bool,
+    completed: bool,
+    manual_request: bool,
+) -> bool:
+    """Return whether startup may still use Cartographer bootstrap mode."""
+
+    return bool(enabled) and not bool(completed) and not bool(manual_request)
+
+
+def bootstrap_fallback_due(
+    first_observation_sec: float | None,
+    now_sec: float,
+    timeout_sec: float,
+) -> bool:
+    """Select guarded direct matching after bounded bootstrap observation."""
+
+    if first_observation_sec is None:
+        return False
+    return float(now_sec) - float(first_observation_sec) >= max(
+        0.1, float(timeout_sec))

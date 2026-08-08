@@ -8,8 +8,10 @@ from lidar_py.relocalization_logic import (
     BootstrapPoseGate,
     ImmutableCrcLock,
     PoseConsensus,
+    bootstrap_fallback_due,
     occupancy_grid_crc,
     refine_distinct_candidates,
+    should_run_bootstrap,
 )
 
 
@@ -166,6 +168,18 @@ def test_bootstrap_gate_resets_on_pose_jump_or_weak_score():
     assert jumped.count == 1
     assert weak.reset
     assert weak.count == 0
+
+
+def test_persistent_low_bootstrap_score_selects_direct_fallback():
+    assert not bootstrap_fallback_due(None, 20.0, 8.0)
+    assert not bootstrap_fallback_due(10.0, 17.9, 8.0)
+    assert bootstrap_fallback_due(10.0, 18.0, 8.0)
+
+
+def test_manual_or_direct_success_never_reenters_bootstrap():
+    assert should_run_bootstrap(True, False, False)
+    assert not should_run_bootstrap(True, False, True)
+    assert not should_run_bootstrap(True, True, False)
 
 
 def test_duplicate_scan_timestamp_does_not_increment_consensus():

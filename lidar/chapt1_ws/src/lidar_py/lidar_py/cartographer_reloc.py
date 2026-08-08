@@ -37,8 +37,10 @@ from .relocalization_logic import (
     BootstrapPoseGate,
     ImmutableCrcLock,
     PoseConsensus,
+    bootstrap_fallback_due,
     occupancy_grid_crc,
     refine_distinct_candidates,
+    should_run_bootstrap,
 )
 
 
@@ -101,6 +103,7 @@ class CartographerRelocalizer(Node):
         self.declare_parameter("bootstrap_min_observations", 8)
         self.declare_parameter("bootstrap_max_translation_delta_m", 0.20)
         self.declare_parameter("bootstrap_max_yaw_delta_deg", 5.0)
+        self.declare_parameter("bootstrap_direct_fallback_sec", 8.0)
 
         self.map_topic = str(self.get_parameter("map_topic").value)
         self.scan_topic = str(self.get_parameter("scan_topic").value)
@@ -188,6 +191,8 @@ class CartographerRelocalizer(Node):
             math.radians(float(self.get_parameter(
                 "bootstrap_max_yaw_delta_deg").value)),
         )
+        self.bootstrap_direct_fallback_sec = max(1.0, float(
+            self.get_parameter("bootstrap_direct_fallback_sec").value))
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -257,6 +262,7 @@ class CartographerRelocalizer(Node):
         self.search_attempts = 0
         self.next_search_at = 0.0
         self.bootstrap_completed = not self.bootstrap_enabled
+        self.bootstrap_observed_since = None
         self._last_logged_state = None
 
         self._publish_ready(False)
@@ -328,6 +334,11 @@ class CartographerRelocalizer(Node):
             return
         self.get_logger().warn("Manual relocalization requested")
         self.manual_request = True
+        # A manual request explicitly selects the guarded direct matcher for
+        # this startup. Never fall back into bootstrap after it verifies.
+        self.bootstrap_completed = True
+        self.bootstrap_observed_since = None
+        self.bootstrap_gate.reset()
         self.pending_search = True
         self.started_at = time.monotonic()
         self.verify_since = None
@@ -351,8 +362,10 @@ class CartographerRelocalizer(Node):
         if self.state == "verifying":
             self._verify_pose()
             return
-        if (self.bootstrap_enabled and not self.bootstrap_completed
-                and not self.manual_request):
+        if should_run_bootstrap(
+                self.bootstrap_enabled,
+                self.bootstrap_completed,
+                self.manual_request):
             self._bootstrap_tick()
             return
         if not self.pending_search or self.busy:
@@ -409,6 +422,7 @@ class CartographerRelocalizer(Node):
                 time.monotonic() - self.stationary_since
                 < self.stationary_hold_sec):
             self.bootstrap_gate.reset()
+            self.bootstrap_observed_since = None
             self.state = "bootstrap_wait_stop"
             self.detail = "hold the vehicle still during startup localization"
             return
@@ -454,12 +468,15 @@ class CartographerRelocalizer(Node):
             points[0], points[1], row, col, yaw, msg.info.resolution,
             msg.info.height, msg.info.width)
         self.best_score = score
+        observed_at = time.monotonic()
+        if self.bootstrap_observed_since is None:
+            self.bootstrap_observed_since = observed_at
         result = self.bootstrap_gate.observe(
             transform.transform.translation.x,
             transform.transform.translation.y,
             yaw,
             stamp_ns,
-            time.monotonic(),
+            observed_at,
             score,
         )
         self.state = "bootstrap_stabilizing"
@@ -468,12 +485,34 @@ class CartographerRelocalizer(Node):
             f"{reset_text} score={score:.3f} stable={result.count}/"
             f"{self.bootstrap_gate.min_observations} "
             f"hold={result.duration_sec:.1f}/{self.bootstrap_gate.hold_sec:.1f}s")
+        if (not result.ready and bootstrap_fallback_due(
+                self.bootstrap_observed_since,
+                observed_at,
+                self.bootstrap_direct_fallback_sec)):
+            self.bootstrap_completed = True
+            self.bootstrap_observed_since = None
+            self.bootstrap_gate.reset()
+            self.pending_search = True
+            self.busy = False
+            self.started_at = observed_at
+            self.search_attempts = 0
+            self.next_search_at = 0.0
+            self.consensus.reset()
+            self.state = "bootstrap_direct_fallback"
+            self.detail = (
+                "bootstrap did not converge; starting guarded multi-scan "
+                f"direct search after {self.bootstrap_direct_fallback_sec:.1f}s "
+                f"(last score={score:.3f})")
+            self.get_logger().warn(
+                f"BOOTSTRAP_DIRECT_FALLBACK {self.detail}")
+            return
         if not result.ready:
             return
 
         mean_pose = result.pose
         self.expected_pose = self._pose(*mean_pose)
         self.bootstrap_completed = True
+        self.bootstrap_observed_since = None
         self.busy = True
         self.pending_search = False
         self.state = "restarting_trajectory"
@@ -624,6 +663,10 @@ class CartographerRelocalizer(Node):
 
         mean_pose = consensus.pose
         self.expected_pose = self._pose(*mean_pose)
+        # The direct matcher now owns the startup pose. This latch prevents a
+        # successful manual or automatic fallback from re-entering bootstrap.
+        self.bootstrap_completed = True
+        self.bootstrap_observed_since = None
         self.get_logger().info(
             "RELOCALIZATION_CONSENSUS accepted "
             f"{consensus.count}/{self.consensus.active_required_count} "
@@ -769,6 +812,8 @@ class CartographerRelocalizer(Node):
         self.pending_search = False
         self.busy = False
         self.manual_request = False
+        self.bootstrap_completed = True
+        self.bootstrap_observed_since = None
         self.state = "localized"
         self.detail = (
             f"manual match confirms active trajectory: "
@@ -989,6 +1034,8 @@ class CartographerRelocalizer(Node):
         self.state = "localized"
         self.detail = f"verified score={score:.3f}"
         self.manual_request = False
+        self.bootstrap_completed = True
+        self.bootstrap_observed_since = None
         self._publish_ready(True)
         self.get_logger().info(
             f"Localization verified; Nav2 may start (score={score:.3f})")

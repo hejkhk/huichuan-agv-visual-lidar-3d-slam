@@ -377,6 +377,9 @@ def generate_launch_description():
             "bootstrap_min_observations": 8,
             "bootstrap_max_translation_delta_m": 0.20,
             "bootstrap_max_yaw_delta_deg": 5.0,
+            # If PBStream bootstrap stays weak, automatically use the same
+            # guarded multi-scan matcher exposed by the RViz button.
+            "bootstrap_direct_fallback_sec": 8.0,
         }],
     )
 

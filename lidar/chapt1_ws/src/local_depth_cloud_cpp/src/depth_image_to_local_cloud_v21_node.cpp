@@ -43,7 +43,7 @@ using visualization_msgs::msg::Marker;
 using visualization_msgs::msg::MarkerArray;
 
 constexpr float kInvalidFloat = std::numeric_limits<float>::quiet_NaN();
-constexpr char kPipelineVersion[] = "v6.34";
+constexpr char kPipelineVersion[] = "v6.35";
 
 bool host_is_big_endian()
 {
@@ -1520,9 +1520,11 @@ private:
         if (neighbors < voxel_min_neighbors_) {
           continue;
         }
-        if (ground_filter_enabled_ && ground_plane.valid) {
+        if (ground_filter_enabled_) {
           const double residual = ground_residual(points_buffer_[read_index], ground_plane);
-          if (residual > ground_plane_remove_above_ &&
+          const double speckle_lower_bound = ground_plane.valid ?
+            ground_plane_remove_above_ : ground_z_max_;
+          if (residual > speckle_lower_bound &&
             residual <= ground_speckle_max_height_ &&
             neighbors < ground_speckle_min_neighbors_)
           {
