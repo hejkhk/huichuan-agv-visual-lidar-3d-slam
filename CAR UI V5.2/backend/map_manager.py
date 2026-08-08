@@ -13,6 +13,7 @@ from typing import Any, Callable
 import yaml
 
 from robot_api.types import ApiResult, NavigationState, RobotSnapshot
+from .map_preview import load_saved_map_preview
 from .map_sync_manager import MapSyncManager
 
 
@@ -193,6 +194,13 @@ class MapManager:
                 errors.append({"name": stem, "error": "主地图目录缺少对应文件"})
                 continue
             source_stat = source_pgm.stat()
+            try:
+                preview_url = str(
+                    load_saved_map_preview(yaml_path).get("map_image", "")
+                )
+            except Exception as exc:
+                errors.append({"name": stem, "error": f"PNG 预览生成失败：{exc}"})
+                continue
             # Prefer a real birth time where the filesystem exposes it.
             # Linux fallback uses the PGM modification time, which copy2
             # preserves and is more meaningful than inode-change time.
@@ -210,6 +218,7 @@ class MapManager:
                     "cache_pgm_path": str(pgm),
                     "cache_yaml_path": str(yaml_path),
                     "cache_pgm_url": pgm.as_uri(),
+                    "cache_preview_url": preview_url,
                     "is_current": stem == self._current_map_id,
                     "modified_time": max(pgm.stat().st_mtime, yaml_path.stat().st_mtime),
                     "created_time": created_timestamp,

@@ -58,8 +58,15 @@ def generate_launch_description():
     bt_xml = LaunchConfiguration("bt_xml_file")
     through_bt_xml = LaunchConfiguration("through_bt_xml_file")
     require_depth_baseline = LaunchConfiguration("require_depth_baseline")
+    nav_map_topic = LaunchConfiguration("nav_map_topic")
+    nav_map_updates_topic = LaunchConfiguration("nav_map_updates_topic")
 
-    common_remappings = [("/tf", "tf"), ("/tf_static", "tf_static")]
+    common_remappings = [
+        ("/tf", "tf"),
+        ("/tf_static", "tf_static"),
+        ("/map", nav_map_topic),
+        ("/map_updates", nav_map_updates_topic),
+    ]
     raw_velocity_remappings = common_remappings + [
         ("/cmd_vel", "/cmd_vel_nav_raw")]
     lifecycle_nodes = [
@@ -334,6 +341,9 @@ def generate_launch_description():
             default_value="/local_highres_cloud_v21/sensor"),
         DeclareLaunchArgument("local_cloud_timeout_sec", default_value="0.50"),
         DeclareLaunchArgument("require_local_cloud_alive", default_value="false"),
+        DeclareLaunchArgument("nav_map_topic", default_value="/map"),
+        DeclareLaunchArgument(
+            "nav_map_updates_topic", default_value="/map_updates"),
         DeclareLaunchArgument("start_cartographer", default_value="true"),
         DeclareLaunchArgument(
             "cartographer_config",

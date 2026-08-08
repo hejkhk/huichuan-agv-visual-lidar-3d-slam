@@ -119,6 +119,9 @@ def test_catalog_ignores_corrupt_incomplete_and_wrong_image_maps(tmp_path):
     assert [item["id"] for item in catalog] == ["good"]
     assert catalog[0]["created_time"] > 0
     assert len(catalog[0]["created_time_text"]) == 16
+    assert catalog[0]["cache_preview_url"].startswith(
+        "data:image/png;base64,"
+    )
     errors = {item["name"]: item["error"] for item in manager.get_errors()}
     assert "wrong" in errors and "image" in errors["wrong"]
     assert "broken" in errors and "PGM" in errors["broken"]

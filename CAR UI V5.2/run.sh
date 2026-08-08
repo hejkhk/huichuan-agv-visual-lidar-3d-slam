@@ -23,7 +23,7 @@ if [[ -n "${HUICHUAN_SLAM_ROOT:-}" ]]; then
 fi
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-88}"
 export ROBOT_UI_MAP_TOPIC="${ROBOT_UI_MAP_TOPIC:-/map}"
-export ROBOT_UI_REFERENCE_MAP_TOPIC="${ROBOT_UI_REFERENCE_MAP_TOPIC:-/localization_reference_map}"
+export ROBOT_UI_PROJECT_ROOT="${ROBOT_UI_PROJECT_ROOT:-${HUICHUAN_SLAM_ROOT:-$UI_ROOT}}"
 
 # The UI never owns an STM32 serial port; chassis_node remains the sole serial
 # endpoint. main.py applies DDS domain 88 unless settings or the environment

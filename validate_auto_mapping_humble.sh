@@ -118,6 +118,7 @@ for file in \
   "$LIDAR_SRC/launch/cartographer_scan_v2_localization_launch.py" \
   "$LIDAR_SRC/config/cartographer_2d_localization.lua" \
   "$LIDAR_SRC/lidar_py/cartographer_reloc.py" \
+  "$LIDAR_SRC/lidar_py/relocalization_logic.py" \
   "$LIDAR_SRC/lidar_py/localization_bringup.py" \
   "$LIDAR_SRC/lidar_py/system_resource_monitor.py" \
   "$LIDAR_SRC/lidar_py/slam_correction_logic.py" \
@@ -138,6 +139,7 @@ for file in \
   "$LIDAR_SRC/behavior_trees/navigate_through_poses_all_beifen_humble.xml" \
   "$ROOT_DIR/START_UI_LOCALIZATION_NAVIGATION.sh" \
   "$ROOT_DIR/CAR UI V5.2/main.py" \
+  "$ROOT_DIR/CAR UI V5.2/backend/map_preview.py" \
   "$ROOT_DIR/CAR UI V5.2/backend/map_manager.py" \
   "$ROOT_DIR/CAR UI V5.2/robot_api/stack_manager.py"; do
   [ -r "$file" ] || fail "Missing Humble project file: $file"
@@ -287,9 +289,9 @@ for costmap_name in ("local_costmap", "global_costmap"):
         raise SystemExit(
             f"{costmap_name} must clear stale static cells below the robot footprint")
     if params["static_layer"].get("map_topic") != "/map":
-        raise SystemExit(f"{costmap_name} StaticLayer must consume mutable /map")
+        raise SystemExit(f"{costmap_name} StaticLayer source topic must remain remappable /map")
     if params["static_layer"].get("subscribe_to_updates") is not True:
-        raise SystemExit(f"{costmap_name} StaticLayer must consume /map_updates")
+        raise SystemExit(f"{costmap_name} StaticLayer must consume remapped updates")
     if params.get("use_maximum") is not True:
         raise SystemExit(f"{costmap_name} lost maximum safety combination")
     inflation = all_beifen[costmap_name][costmap_name]["ros__parameters"]["inflation_layer"]
@@ -332,10 +334,10 @@ for required in (
     "cartographer_scan_v2_localization_launch.py",
     "localization_map_server",
     "mutable_navigation_map_node",
-    '"topic_name": "/localization_reference_map"',
-    '"reference_map_topic": "/localization_reference_map"',
-    '"output_map_topic": "/map"',
-    '"update_topic": "/map_updates"',
+    '"topic_name": "/map"',
+    '"reference_map_topic": "/map"',
+    '"output_map_topic": "/navigation_live_map"',
+    '"update_topic": "/navigation_live_map_updates"',
     "cartographer_reloc",
     "localization_bringup",
     '"strong_match_score": 0.90',
@@ -351,10 +353,21 @@ for required in (
 ):
     if required not in dual:
         raise SystemExit(f"dual-resolution launch does not select {required}")
-if dual.count('"output_map_topic": "/map"') != 1:
-    raise SystemExit("localization mode must have exactly one explicit /map owner")
-if '"topic_name": "/map"' in dual:
-    raise SystemExit("reference map_server must never publish the mutable /map")
+if dual.count('"topic_name": "/map"') != 1:
+    raise SystemExit("localization mode must have one immutable /map server")
+if dual.count('"output_map_topic": "/navigation_live_map"') != 1:
+    raise SystemExit("mutable navigation map must have one separate output owner")
+if "/localization_reference_map" in dual:
+    raise SystemExit("legacy ambiguous localization map topic is forbidden")
+navigation_launch = (
+    root / "launch" / "cartographer_auto_mapping_jazzy_launch.py"
+).read_text(encoding="utf-8")
+for required in (
+        'DeclareLaunchArgument("nav_map_topic", default_value="/map")',
+        '("/map", nav_map_topic)',
+        '("/map_updates", nav_map_updates_topic)'):
+    if required not in navigation_launch:
+        raise SystemExit(f"localization Nav2 map remap contract missing: {required}")
 
 mutable_map = (
     root.parent / "local_depth_cloud_cpp" / "src" /
@@ -364,7 +377,8 @@ for required in (
         "mark_confirmations", "clear_confirmations", "collect_ray_cells",
         "NAV_MAP_POSE_JUMP", "restore_reference_on_pose_jump",
         "NAV_MAP_LOOP_CORRECTION", "slam_correction_hold_topic",
-        "OccupancyGridUpdate", "localization_ready"):
+        "OccupancyGridUpdate", "localization_ready",
+        "NAV_MAP_REFERENCE_MUTATION_REJECTED", "reference_crc32_"):
     if required not in mutable_map:
         raise SystemExit(f"mutable navigation map safety contract missing: {required}")
 resource_monitor = (
@@ -500,23 +514,28 @@ if "strong_match_score" not in reloc or "strong_match_min_margin" not in reloc:
 for required in (
         "restart_wait", "trajectory_restart_delay_sec",
         "active_trajectory_confirmed", "max_verify_tf_age_sec",
-        "min_verify_tf_advance_sec"):
+        "min_verify_tf_advance_sec", "REFERENCE_MAP_LOCKED",
+        "REFERENCE_MAP_MUTATION_REJECTED", "RELOCALIZATION_CONSENSUS",
+        "refine_distinct_candidates", "PoseConsensus"):
     if required not in reloc:
         raise SystemExit(
             f"startup relocalizer freshness contract missing: {required}")
 if "retry_wait" not in reloc or "max_auto_attempts" not in reloc:
     raise SystemExit("startup relocalizer is missing bounded automatic retries")
-if '"max_auto_attempts": 12' not in dual_launch:
+if '"max_auto_attempts": 30' not in dual_launch:
     raise SystemExit("startup relocalizer retry budget regressed below the Jetson profile")
 if "wait_topic /cartographer_pose_odom 30" not in runner:
     raise SystemExit("mapping launcher must still verify Cartographer corrected pose")
 for required in (
         "queue_incremental_package", ".lidar-py-source.sha256",
         ".short-goal-bt-source.sha256", "skipping colcon",
-        "wait_transient_topic /localization_reference_map 30",
-        "wait_topic_publisher /map_updates 15",
+        "confirmed by relocalizer CRC lock",
+        "wait_transient_topic /navigation_live_map 30",
+        "wait_topic_publisher /navigation_live_map_updates 15",
         "confirmed by in-process mutable map node",
         "wait_topic /slam_correction_hold 10",
+        "confirmed by chassis in-process publish counter",
+        "[DEGRADED] Gemini2 RGB-D streams are unavailable",
         "resource_usage.csv"):
     if required not in runner:
         raise SystemExit(

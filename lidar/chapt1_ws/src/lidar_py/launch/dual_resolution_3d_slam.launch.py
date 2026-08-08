@@ -281,7 +281,7 @@ def generate_launch_description():
         parameters=[{
             "use_sim_time": False,
             "yaml_filename": LaunchConfiguration("localization_map_yaml"),
-            "topic_name": "/localization_reference_map",
+            "topic_name": "/map",
             "frame_id": "map",
         }],
     )
@@ -293,9 +293,9 @@ def generate_launch_description():
         output="screen",
         condition=IfCondition(LaunchConfiguration("localization_mode")),
         parameters=[{
-            "reference_map_topic": "/localization_reference_map",
-            "output_map_topic": "/map",
-            "update_topic": "/map_updates",
+            "reference_map_topic": "/map",
+            "output_map_topic": "/navigation_live_map",
+            "update_topic": "/navigation_live_map_updates",
             "scan_topic": LaunchConfiguration("filtered_scan_topic"),
             "localization_ready_topic": "/localization_ready",
             "slam_correction_hold_topic": "/slam_correction_hold",
@@ -342,7 +342,7 @@ def generate_launch_description():
         output="screen",
         condition=IfCondition(LaunchConfiguration("localization_mode")),
         parameters=[{
-            "map_topic": "/localization_reference_map",
+            "map_topic": "/map",
             "scan_topic": LaunchConfiguration("filtered_scan_topic"),
             "odom_topic": "/odom",
             "base_frame": "base_link",
@@ -361,10 +361,10 @@ def generate_launch_description():
             "max_verify_tf_age_sec": 0.75,
             "min_verify_tf_advance_sec": 0.50,
             "verify_timeout_sec": 8.0,
-            "auto_retry_interval_sec": 5.0,
+            "auto_retry_interval_sec": 0.85,
             # Keep the strict corridor-ambiguity gate, but do not give up
             # after only ~20 seconds of noisy startup scans.
-            "max_auto_attempts": 12,
+            "max_auto_attempts": 30,
             "max_wait_sec": 180.0,
         }],
     )
@@ -954,6 +954,16 @@ def generate_launch_description():
                 "local_sensor_cloud_topic"),
             "local_cloud_timeout_sec": "0.50",
             "require_local_cloud_alive": "true",
+            "nav_map_topic": PythonExpression([
+                "'/navigation_live_map' if '",
+                LaunchConfiguration("localization_mode"),
+                "' == 'true' else '/map'",
+            ]),
+            "nav_map_updates_topic": PythonExpression([
+                "'/navigation_live_map_updates' if '",
+                LaunchConfiguration("localization_mode"),
+                "' == 'true' else '/map_updates'",
+            ]),
             "show_serial_window": "false",
             "controller_override_file": controller_override,
             "costmap_override_file": LaunchConfiguration(

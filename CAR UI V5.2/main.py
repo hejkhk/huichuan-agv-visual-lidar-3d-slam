@@ -89,18 +89,18 @@ def create_engine() -> tuple[QGuiApplication, QQmlApplicationEngine]:
     engine = QQmlApplicationEngine()
     root = Path(__file__).resolve().parent
     data_dir = Path(os.getenv("ROBOT_UI_DATA_DIR", str(root / "data"))).expanduser()
+    default_project_root = os.getenv("HUICHUAN_SLAM_ROOT", str(root))
     project_root = Path(
-        os.getenv("ROBOT_UI_PROJECT_ROOT", str(root))
+        os.getenv("ROBOT_UI_PROJECT_ROOT", default_project_root)
     ).expanduser().resolve()
     configure_ros_domain_id(data_dir)
     logging.getLogger("ROS").info(
-        "ROS 环境：domain=%s rmw=%s dds=%s map=%s reference_map=%s project=%s",
+        "ROS 环境：domain=%s rmw=%s dds=%s immutable_map=%s project=%s",
         os.getenv("ROS_DOMAIN_ID", "未设置"),
         os.getenv("RMW_IMPLEMENTATION", "默认"),
         os.getenv("CYCLONEDDS_URI", "未设置"),
         os.getenv("ROBOT_UI_MAP_TOPIC", "/map"),
-        os.getenv("ROBOT_UI_REFERENCE_MAP_TOPIC", "/localization_reference_map"),
-        os.getenv("HUICHUAN_SLAM_ROOT", "未设置"),
+        project_root,
     )
     map_image_provider = MapImageProvider()
     engine.addImageProvider("live-map", map_image_provider)

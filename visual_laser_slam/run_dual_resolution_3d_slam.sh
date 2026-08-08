@@ -1407,8 +1407,8 @@ log "  RTAB workers    : $RTABMAP_THREADS"
 log "  Runtime log     : $RUNTIME_LOG"
 log "  Resource CSV    : $RUN_DIR/resource_usage.csv (20s grouped CPU/RAM/I/O)"
 if is_true "$LOCALIZATION_MODE"; then
-  log "  Map ownership   : selected PGM -> /localization_reference_map (immutable)"
-  log "                    live confirmed LiDAR evidence -> /map + /map_updates"
+  log "  Map ownership   : selected PGM -> /map (immutable reference/UI)"
+  log "                    live LiDAR -> /navigation_live_map + updates (Nav2 only)"
 fi
 log "============================================================"
 
@@ -1567,26 +1567,41 @@ if is_true "$ENABLE_FIXED_SCAN_FILTER"; then
 fi
 
 log "[startup] Verifying the motion-feedback and Cartographer safety chain..."
-wait_topic /odom 20 || die "STM32 odometry /odom did not start"
-wait_topic /imu_cartographer 20 || \
-  die "STM32 planar IMU /imu_cartographer did not start"
+if ! wait_topic /odom 20; then
+  grep -Eq 'PUBLISH_LATENCY .*odom\[n=[1-9][0-9]*' "$RUNTIME_LOG" || \
+    die "STM32 odometry /odom did not start"
+  log "[ready] data /odom (confirmed by chassis in-process publish counter)"
+fi
+if ! wait_topic /imu_cartographer 20; then
+  grep -Eq 'PUBLISH_LATENCY .*cartographer_imu\[n=[1-9][0-9]*' \
+    "$RUNTIME_LOG" || \
+    die "STM32 planar IMU /imu_cartographer did not start"
+  log "[ready] data /imu_cartographer (confirmed by chassis publish counter)"
+fi
 if is_true "$LOCALIZATION_MODE"; then
-  wait_transient_topic /localization_reference_map 30 || \
-    die "Static localization reference map did not publish /localization_reference_map"
-  wait_transient_topic /map 30 || \
-    die "Mutable navigation map did not publish its initial /map"
-  if ! wait_topic_publisher /map_updates 15; then
+  if ! wait_transient_topic /map 30; then
+    grep -Eq 'REFERENCE_MAP_LOCKED topic=/map ' "$RUNTIME_LOG" || \
+      die "Immutable localization reference map did not publish /map"
+    log "[ready] data /map (confirmed by relocalizer CRC lock)"
+  fi
+  if ! wait_transient_topic /navigation_live_map 30; then
+    grep -Eq 'NAV_MAP_REFERENCE loaded=|NAV_MAP_STATUS loaded=true .*full=[1-9]' \
+      "$RUNTIME_LOG" || \
+      die "Mutable navigation map did not publish /navigation_live_map"
+    log "[ready] data /navigation_live_map (confirmed by mutable map node)"
+  fi
+  if ! wait_topic_publisher /navigation_live_map_updates 15; then
     # ros2cli graph discovery can lag badly while the Jetson is saturated.
     # The C++ node emits this status only after both publishers are created,
     # and a positive update count additionally proves real publication. Do
     # not tear down a healthy stack because a short-lived CLI participant did
     # not discover the endpoint in time.
     if grep -Eq \
-        'NAV_MAP_STATUS loaded=true .*updates=[1-9][0-9]*|Mutable navigation map: .*output=/map \+ /map_updates' \
+        'NAV_MAP_STATUS loaded=true .*updates=[1-9][0-9]*|Mutable navigation map: .*output=/navigation_live_map \+ /navigation_live_map_updates' \
         "$RUNTIME_LOG"; then
-      log "[ready] publisher /map_updates (confirmed by in-process mutable map node)"
+      log "[ready] publisher /navigation_live_map_updates (confirmed by in-process mutable map node)"
     else
-      die "Mutable navigation map did not advertise /map_updates"
+      die "Mutable navigation map did not advertise /navigation_live_map_updates"
     fi
   fi
   # In localization mode Cartographer deliberately starts with no active
@@ -1605,75 +1620,117 @@ else
 fi
 
 log "[startup] Verifying Gemini2 and the live collision cloud..."
-if ! wait_runtime_evidence \
+CAMERA_READY=false
+LOCAL_CLOUD_READY=false
+NAVIGATION_READY=true
+MOTION_RELEASED=false
+if wait_runtime_evidence \
     'RGB-D sync .*color/depth [1-9][0-9.]*[/][1-9][0-9.]* Hz' \
     'Gemini2 RGB and depth streams' 30; then
+  CAMERA_READY=true
+else
   camera_ownership_report
-  die "Gemini2 RGB-D streams did not start"
+  log "[DEGRADED] Gemini2 RGB-D streams are unavailable."
+  log "[DEGRADED] Immutable /map, Cartographer localization, RViz and UI stay alive."
+  log "[DEGRADED] Host motion remains locked until the collision cloud is healthy."
 fi
-wait_runtime_evidence \
-  'STEP10V2\.1 [1-9][0-9]*x[1-9][0-9]* -> [1-9][0-9]* live' \
-  'STEP10V2.1 local cloud data' 30 || \
-  die "STEP10V2.1 local cloud did not start"
+if is_true "$CAMERA_READY"; then
+  if wait_runtime_evidence \
+      'STEP10V2\.1 [1-9][0-9]*x[1-9][0-9]* -> [1-9][0-9]* live' \
+      'STEP10V2.1 local cloud data' 30; then
+    LOCAL_CLOUD_READY=true
+  else
+    log "[DEGRADED] STEP10V2.1 local cloud did not start; motion remains locked."
+  fi
+fi
 if is_true "$ENABLE_VISUAL_FUSION"; then
-  wait_topic /visual_odom 60 || die "RGB-D visual odometry did not start"
-  wait_topic /odometry/filtered 30 || die "Visual/wheel EKF did not start"
+  if ! is_true "$CAMERA_READY" || ! wait_topic /visual_odom 60 || \
+      ! wait_topic /odometry/filtered 30; then
+    log "[DEGRADED] Visual odometry/EKF is unavailable; the stack remains alive and locked."
+    LOCAL_CLOUD_READY=false
+  fi
 fi
 
 if is_true "$ENABLE_NAVIGATION"; then
   log "[startup] Verifying the live collision input before activating Nav2..."
-  wait_topic /slam_correction_hold 10 || \
-    die "SLAM correction hold guard did not publish"
-  wait_topic_publisher \
-    "${LOCAL_SENSOR_CLOUD_TOPIC:-/local_highres_cloud_v21/sensor}" 15 || \
-    die "Recent geometry-filtered navigation cloud did not start"
-  wait_runtime_evidence \
-    'COLLISION_GATE .*cloud_age=[0-9][0-9.]*ms .*scan_alive=true' \
-    'C++ collision gate with fresh cloud and scan' 15 || \
-    die "C++ local collision gate did not start"
+  if ! wait_topic /slam_correction_hold 10; then
+    log "[DEGRADED] SLAM correction guard is unavailable; navigation stays locked."
+    NAVIGATION_READY=false
+  fi
+  if is_true "$LOCAL_CLOUD_READY"; then
+    if ! wait_topic_publisher \
+        "${LOCAL_SENSOR_CLOUD_TOPIC:-/local_highres_cloud_v21/sensor}" 15; then
+      log "[DEGRADED] Navigation cloud publisher is unavailable; motion stays locked."
+      NAVIGATION_READY=false
+    fi
+    if ! wait_runtime_evidence \
+        'COLLISION_GATE .*cloud_age=[0-9][0-9.]*ms .*scan_alive=true' \
+        'C++ collision gate with fresh cloud and scan' 15; then
+      log "[DEGRADED] C++ collision gate has no fresh input; motion stays locked."
+      NAVIGATION_READY=false
+    fi
+  else
+    NAVIGATION_READY=false
+  fi
   if is_true "$LOCALIZATION_MODE"; then
     log "[localization] Waiting for a verified scan-to-map match..."
-    wait_boolean_true /localization_ready 150 || \
-      die "Relocalization was not verified; Nav2 and host motion remain locked"
-    wait_lifecycle_active /controller_server 60 || \
-      die "Relocalization succeeded but Nav2 did not become active"
+    if ! wait_boolean_true /localization_ready 150; then
+      log "[DEGRADED] Relocalization is not verified; UI/RViz remain available and motion stays locked."
+      NAVIGATION_READY=false
+    elif ! wait_lifecycle_active /controller_server 60; then
+      log "[DEGRADED] Nav2 did not become active; localization and UI remain alive."
+      NAVIGATION_READY=false
+    fi
   else
-    start_navigation_lifecycle || \
-      die "Nav2 lifecycle activation failed; movement remains locked"
+    if ! start_navigation_lifecycle; then
+      log "[DEGRADED] Nav2 lifecycle activation failed; mapping remains alive and motion stays locked."
+      NAVIGATION_READY=false
+    fi
   fi
   # Nested costmap parameter services do not exist until the
   # controller/planner lifecycle nodes have been configured. Source YAML was
   # checked before launch, so release immediately after lifecycle startup and
   # never leave an active action server behind a host-motion gate.
-  release_motion_interlock || \
-    die "Could not release the startup motion interlock"
-  log "[ready] Startup motion interlock released; PS2/Nav2 motion is enabled."
+  if is_true "$CAMERA_READY" && is_true "$LOCAL_CLOUD_READY" && \
+      is_true "$NAVIGATION_READY"; then
+    if release_motion_interlock; then
+      MOTION_RELEASED=true
+      log "[ready] Startup motion interlock released; PS2/Nav2 motion is enabled."
+    else
+      log "[DEGRADED] Motion interlock handshake failed; stack stays alive and locked."
+      NAVIGATION_READY=false
+    fi
+  else
+    log "[DEGRADED] Navigation safety chain is incomplete; no motion-release request was sent."
+  fi
 
   # This is a runtime audit, not a startup-kill switch. ros2cli discovery can
   # be delayed even when the lifecycle nodes and their costmaps are healthy.
   # The source files were already validated before launch; an unavailable CLI
   # probe must not tear down Cartographer, the camera and every Nav2 process.
-  log "[startup] Auditing active costmap parameters (non-fatal CLI check)..."
-  runtime_costmap_contract_ok=true
-  wait_parameter_value \
-    /local_costmap/local_costmap lethal_cost_threshold 65 4 WARNING || \
-    runtime_costmap_contract_ok=false
-  wait_parameter_value \
-    /global_costmap/global_costmap lethal_cost_threshold 65 4 WARNING || \
-    runtime_costmap_contract_ok=false
-  wait_parameter_value \
-    /local_costmap/local_costmap inflation_layer.inflation_radius 0.10 4 WARNING || \
-    runtime_costmap_contract_ok=false
-  wait_parameter_value \
-    /global_costmap/global_costmap inflation_layer.inflation_radius 0.10 4 WARNING || \
-    runtime_costmap_contract_ok=false
-  if [ "$runtime_costmap_contract_ok" != true ]; then
-    log "[WARNING] Runtime costmap query was incomplete; source contract passed and navigation remains running."
+  if is_true "$NAVIGATION_READY"; then
+    log "[startup] Auditing active costmap parameters (non-fatal CLI check)..."
+    runtime_costmap_contract_ok=true
+    wait_parameter_value \
+      /local_costmap/local_costmap lethal_cost_threshold 65 4 WARNING || \
+      runtime_costmap_contract_ok=false
+    wait_parameter_value \
+      /global_costmap/global_costmap lethal_cost_threshold 65 4 WARNING || \
+      runtime_costmap_contract_ok=false
+    wait_parameter_value \
+      /local_costmap/local_costmap inflation_layer.inflation_radius 0.10 4 WARNING || \
+      runtime_costmap_contract_ok=false
+    wait_parameter_value \
+      /global_costmap/global_costmap inflation_layer.inflation_radius 0.10 4 WARNING || \
+      runtime_costmap_contract_ok=false
+    if [ "$runtime_costmap_contract_ok" != true ]; then
+      log "[WARNING] Runtime costmap query was incomplete; source contract passed."
+    fi
   fi
 fi
 
 log "[startup] Checking non-blocking 3D-memory and exploration diagnostics..."
-if is_true "$ENABLE_NAVIGATION"; then
+if is_true "$ENABLE_NAVIGATION" && is_true "$NAVIGATION_READY"; then
   require_lifecycle_active /controller_server || \
     log "[WARNING] Nav2 controller lifecycle query is delayed."
   require_lifecycle_active /bt_navigator || \
@@ -1689,9 +1746,11 @@ if is_true "$ENABLE_NAVIGATION"; then
   wait_topic /local_highres_cloud_v21/clear_sensor 15 || \
     log "[WARNING] Depth-valid clearing stream is not ready; bounded STVL decay remains active."
 fi
-wait_topic /dual_3d/rgbd_timestamp_stats 15 || \
-  log "[WARNING] RGB-D timestamp diagnostics did not publish yet."
-if is_true "$ENABLE_RTABMAP"; then
+if is_true "$CAMERA_READY"; then
+  wait_topic /dual_3d/rgbd_timestamp_stats 15 || \
+    log "[WARNING] RGB-D timestamp diagnostics did not publish yet."
+fi
+if is_true "$ENABLE_RTABMAP" && is_true "$CAMERA_READY"; then
   wait_topic /rtabmap_3d/info 30 || \
     log "[WARNING] RTAB-Map persistent graph did not publish diagnostics yet."
   if is_true "$ENABLE_NAVIGATION"; then
@@ -1699,17 +1758,23 @@ if is_true "$ENABLE_RTABMAP"; then
       log "[WARNING] Persistent visual-wall stream did not publish yet."
   fi
 fi
-if is_true "${USE_OCTOMAP:-true}"; then
+if is_true "${USE_OCTOMAP:-true}" && is_true "$CAMERA_READY"; then
   wait_topic /rtabmap_3d/octomap_occupied_space 30 || \
     log "[WARNING] Optimized OctoMap display did not publish yet."
 fi
-if is_true "$ENABLE_NAVIGATION"; then
+if is_true "$ENABLE_NAVIGATION" && is_true "$NAVIGATION_READY"; then
   wait_graph_name service /control_exploration 15 || \
     log "[WARNING] Frontier exploration service is unavailable; manual Nav2 remains enabled."
 fi
 
 log ""
-log "[ready] All three layers are running. Move slowly for the first 10 seconds."
+if is_true "$CAMERA_READY" && is_true "$LOCAL_CLOUD_READY" && \
+    { ! is_true "$ENABLE_NAVIGATION" || is_true "$MOTION_RELEASED"; }; then
+  log "[ready] All configured layers are running. Move slowly for the first 10 seconds."
+else
+  log "[DEGRADED] Core map/localization remains running; 3D/navigation readiness is incomplete."
+  log "[DEGRADED] Do not move the vehicle until /robot/system_ready reports true."
+fi
 log "[check] ros2 run tf2_ros tf2_echo map base_link"
 log "[check] ros2 topic echo ${LOCAL_STATS_TOPIC:-/local_highres_cloud_v21/stats} --once"
 log "[check] ros2 topic echo /dual_3d/rgbd_timestamp_stats --once"

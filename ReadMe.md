@@ -1411,11 +1411,12 @@ sudo apt install python3-scipy
 ./START_DUAL_2D_3D_LOCALIZATION.sh floor_1
 ```
 
-启动后保持车辆静止。系统先把 YAML/PGM 发布到只读的
-`/localization_reference_map`，仅供启动重定位匹配；Nav2 和 RViz 使用的 `/map` 由
-`mutable_navigation_map_node` 独占发布。随后加载同会话的 PBSTREAM 作为 Cartographer
-冻结地图，使用当前 2D 雷达进行全局扫描匹配。只有匹配得分和唯一性检查通过后才激活
-Nav2 并解除主机运动锁；失败时车辆保持不动，RViz 面板会显示原因。
+启动后保持车辆静止。系统把所选 YAML/PGM 固定发布到 `/map`，该话题是不可变的旧地图，
+只供启动/手动重定位、UI 和原图审计使用。动态雷达证据单独发布到
+`/navigation_live_map` 与 `/navigation_live_map_updates`，仅由 Nav2 使用，永远不会回写或
+参与重定位参考。随后加载同会话的 PBSTREAM 作为 Cartographer 冻结地图，使用当前 2D 雷达
+进行全局扫描匹配。只有候选唯一性和连续 3 个不同雷达帧的一致性都通过后才激活 Nav2 并
+解除主机运动锁；失败时车辆保持不动，RViz 面板会显示原因。
 
 `Verified Relocalization` 面板只存在于这个启动版本。运行中需要重新定位时，先停车再点
 `Relocalize`；Nav2 会暂停，成功后恢复。系统不会在正常行驶中自行触发重定位或重启轨迹。
@@ -1433,16 +1434,18 @@ STVL、长期视觉墙、最终碰撞门和底盘安全链路均继续运行。
 运行中若 Cartographer 更新 `map -> odom` 超过瞬时 `0.20 m/5 deg`，或在 `0.5 秒`内累计
 超过 `0.30 m/6 deg`，`slam_correction_guard` 才会把它判为真实跳变并锁住零速度 `1 秒`。
 普通 `0.5-1.2 deg` 扫描匹配细化不会再反复停车。重定位模式还会丢弃
-校正前的雷达证据、恢复不可变参考图并短暂冻结增量更新，避免旧坐标证据污染 `/map`。
+校正前的雷达证据、从不可变 `/map` 恢复导航副本并短暂冻结增量更新，避免旧坐标证据污染
+`/navigation_live_map`。
 
 ### 重定位模式的实时二维地图
 
 ```text
 Loc_MAP/*.yaml + *.pgm
-          -> /localization_reference_map（不可变，只用于重定位）
+          -> /map（不可变：重定位 + UI + RViz 原图）
           -> mutable_navigation_map_node + /scan_timed_v2_filtered
-          -> /map（完整地图，30 秒保底重发）+ /map_updates（最高 2 Hz 增量）
-          -> Nav2 local/global StaticLayer + RViz
+          -> /navigation_live_map（导航副本，30 秒保底重发）
+             + /navigation_live_map_updates（最高 2 Hz 增量）
+          -> Nav2 local/global StaticLayer
 ```
 
 - 新障碍必须在不同雷达帧中连续确认 `3` 次才写入，单帧散点不会污染导航地图。
@@ -1453,11 +1456,14 @@ Loc_MAP/*.yaml + *.pgm
 - 未知区域不会被自由射线自动改成可通行区域；当前地图尺寸也不会越过所选 PGM 边界扩张。
 - `/localization_ready=false`、时间戳 TF 缺失、相邻扫描位姿跳变超过 `0.35 m/20 deg`
   时停止更新。发生位姿跳变会恢复只读参考图并冻结两秒，避免错误定位污染导航地图。
-- Cartographer 在线回环触发 `/slam_correction_hold` 时，同样恢复只读参考图并清空校正前证据；
-  `/map` 随后继续根据新坐标系中的连续雷达确认更新，原图始终保留在
-  `/localization_reference_map` 中不变。
-- 重定位 RViz 默认显示 `Live Mutable Navigation Map`；需要对比原图时手动勾选
-  `Selected Reference Map (Immutable Audit)`。
+- Cartographer 在线回环触发 `/slam_correction_hold` 时，同样从 `/map` 恢复导航副本并清空
+  校正前证据；`/navigation_live_map` 随后在新坐标系中继续更新，`/map` 始终不变。
+- 重定位 RViz 默认显示 `Selected Reference Map (Immutable)`；需要审计动态导航副本时手动
+  勾选 `Navigation Live Map (Dynamic Audit)`。
+- UI 首先直接解码所选 `Loc_MAP` 的 YAML/PGM，因此不依赖 DDS 发现速度即可显示地图；收到
+  ROS `/map` 后还会校验尺寸、分辨率、原点和栅格 CRC，不一致的地图会被拒绝并写入 UI 日志。
+- 深度相机启动失败或运行中断流时，旧地图、2D 定位、RViz 和 UI 保持运行；碰撞传感器健康门
+  保持关闭，系统不会放行车辆运动，也不会因相机故障主动关闭整套进程。
 
 ### 性能与占用日志
 

@@ -40,10 +40,10 @@ Visualization Manager:
       Alpha: 0.55
       Value: true
     - Class: rviz_default_plugins/Map
-      Alpha: 0.30
+      Alpha: 0.55
       Color Scheme: map
       Enabled: true
-      Name: Live Mutable Navigation Map
+      Name: Selected Reference Map (Immutable)
       Topic:
         Depth: 1
         Durability Policy: Transient Local
@@ -52,16 +52,22 @@ Visualization Manager:
         Value: /map
       Value: true
     - Class: rviz_default_plugins/Map
-      Alpha: 0.18
+      Alpha: 0.30
       Color Scheme: map
       Enabled: false
-      Name: Selected Reference Map (Immutable Audit)
+      Name: Navigation Live Map (Dynamic Audit)
       Topic:
         Depth: 1
         Durability Policy: Transient Local
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /localization_reference_map
+        Value: /navigation_live_map
+      Update Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /navigation_live_map_updates
       Value: false
     - Class: rviz_default_plugins/LaserScan
       Enabled: true

@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from backend.map_preview import load_saved_map_preview
+
 from .mock import MockRobotApi
 from .stack_manager import SlamStackManager
 from .types import ApiResult, NavigationState, Pose, RobotSnapshot
@@ -38,7 +40,11 @@ class TeamRobotApi(MockRobotApi):
             if self._stack.project_root is not None
             else Path(__file__).resolve().parents[1] / "map"
         )
-        self.selected_map_id = str(self._stack.status().get("map_name", ""))
+        stack_state = self._stack.status()
+        self.selected_map_id = str(stack_state.get("map_name", ""))
+        self.reference_map_signature = None
+        if stack_state.get("mode") not in {"mapping", "navigation"}:
+            self._load_reference_map_preview(self.selected_map_id)
         self._ros = None
         try:
             from .ros2_client import Ros2Client
@@ -182,6 +188,7 @@ class TeamRobotApi(MockRobotApi):
         result = self._stack.start("mapping")
         if not result.success:
             return result
+        self.reference_map_signature = None
         with self._snapshot_lock:
             self.snapshot.mapping_active = True
             self.snapshot.mapping_state = "STARTING"
@@ -204,15 +211,64 @@ class TeamRobotApi(MockRobotApi):
         prepared = self._stack.prepare_localization_map(yaml_path)
         if not prepared.success:
             return prepared
+        self.selected_map_id = str(prepared.data)
+        if not self._load_reference_map_preview(self.selected_map_id):
+            return ApiResult.fail(
+                "地图已准备，但 UI 无法解码所选 YAML/PGM",
+                "MAP_PREVIEW_FAILED",
+            )
         started = self._stack.start("localization", str(prepared.data))
         if not started.success:
             return ApiResult.fail(started.message, started.error_code)
-        self.selected_map_id = str(prepared.data)
         with self._snapshot_lock:
             self.snapshot.localization_ready = False
             self.snapshot.localization_state = "STARTING"
             self.snapshot.localization_detail = f"正在加载地图 {Path(yaml_path).stem}"
         return ApiResult.ok(prepared.data, message="地图已切换，正在自动重定位")
+
+    def _load_reference_map_preview(self, map_id: str = "") -> bool:
+        """Show the selected immutable map before DDS discovery completes."""
+
+        identifier = str(map_id or "").strip()
+        yaml_path = self.map_directory / f"{identifier}.yaml" if identifier else None
+        if yaml_path is None or not yaml_path.is_file():
+            default = self.map_directory / "map.yaml"
+            candidates = sorted(self.map_directory.glob("*.yaml"))
+            if default.is_file():
+                yaml_path = default
+            elif len(candidates) == 1:
+                yaml_path = candidates[0]
+            else:
+                self.log.warning(
+                    "未选择唯一的 Loc_MAP 地图，文件预览暂不可用：directory=%s maps=%d",
+                    self.map_directory,
+                    len(candidates),
+                )
+                return False
+        try:
+            preview = load_saved_map_preview(yaml_path)
+        except Exception as exc:
+            self.log.error("Loc_MAP 文件预览解码失败：yaml=%s error=%s", yaml_path, exc)
+            return False
+        signature = preview.pop("map_signature")
+        crc = preview.pop("map_crc32")
+        source_yaml = preview.pop("map_yaml_path")
+        preview.pop("map_image_path", None)
+        self.reference_map_signature = signature
+        with self._snapshot_lock:
+            preview["map_revision"] = self.snapshot.map_revision + 1
+        self.update_map(preview)
+        self.log.info(
+            "地图预览已加载：source=filesystem selected=%s yaml=%s size=%dx%d "
+            "resolution=%.3f crc=%s decode=ok",
+            yaml_path.stem,
+            source_yaml,
+            preview["map_width"],
+            preview["map_height"],
+            preview["map_resolution"],
+            crc,
+        )
+        return True
 
     def get_selected_map_id(self) -> str:
         """Return the persisted map selected by UI or terminal launchers."""
@@ -223,7 +279,10 @@ class TeamRobotApi(MockRobotApi):
         return self.selected_map_id
 
     def start_slam_navigation(self) -> ApiResult[None]:
-        return self._stack.start("navigation")
+        result = self._stack.start("navigation")
+        if result.success:
+            self.reference_map_signature = None
+        return result
 
     def stop_slam_system(self) -> ApiResult[None]:
         return self._stack.stop()

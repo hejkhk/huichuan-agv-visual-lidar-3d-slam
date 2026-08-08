@@ -7,6 +7,7 @@ changes the trajectory automatically; a new search can only be requested from
 the localization RViz panel.
 """
 
+import copy
 import math
 import time
 
@@ -31,6 +32,13 @@ from rclpy.qos import (
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, String
 from tf2_ros import Buffer, TransformListener
+
+from .relocalization_logic import (
+    ImmutableCrcLock,
+    PoseConsensus,
+    occupancy_grid_crc,
+    refine_distinct_candidates,
+)
 
 
 def quaternion_yaw(rotation):
@@ -76,6 +84,14 @@ class CartographerRelocalizer(Node):
         self.declare_parameter("verify_timeout_sec", 8.0)
         self.declare_parameter("manual_same_pose_translation_m", 0.15)
         self.declare_parameter("manual_same_pose_yaw_deg", 5.0)
+        self.declare_parameter("max_refined_candidates", 8)
+        self.declare_parameter("candidate_cluster_translation_m", 0.8)
+        self.declare_parameter("candidate_cluster_yaw_deg", 20.0)
+        self.declare_parameter("consensus_required_scans", 3)
+        self.declare_parameter("consensus_translation_m", 0.35)
+        self.declare_parameter("consensus_yaw_deg", 12.0)
+        self.declare_parameter("verify_expected_translation_m", 0.50)
+        self.declare_parameter("verify_expected_yaw_deg", 20.0)
 
         self.map_topic = str(self.get_parameter("map_topic").value)
         self.scan_topic = str(self.get_parameter("scan_topic").value)
@@ -105,7 +121,7 @@ class CartographerRelocalizer(Node):
             self.get_parameter("strong_match_score").value)
         self.strong_match_min_margin = float(
             self.get_parameter("strong_match_min_margin").value)
-        self.auto_retry_interval_sec = max(1.0, float(
+        self.auto_retry_interval_sec = max(0.25, float(
             self.get_parameter("auto_retry_interval_sec").value))
         self.max_auto_attempts = max(
             1, int(self.get_parameter("max_auto_attempts").value))
@@ -126,6 +142,22 @@ class CartographerRelocalizer(Node):
             self.get_parameter("manual_same_pose_translation_m").value))
         self.manual_same_pose_yaw = math.radians(max(0.0, float(
             self.get_parameter("manual_same_pose_yaw_deg").value)))
+        self.max_refined_candidates = max(2, int(
+            self.get_parameter("max_refined_candidates").value))
+        self.candidate_cluster_translation_m = max(0.10, float(
+            self.get_parameter("candidate_cluster_translation_m").value))
+        self.candidate_cluster_yaw = math.radians(max(1.0, float(
+            self.get_parameter("candidate_cluster_yaw_deg").value)))
+        self.verify_expected_translation_m = max(0.10, float(
+            self.get_parameter("verify_expected_translation_m").value))
+        self.verify_expected_yaw = math.radians(max(1.0, float(
+            self.get_parameter("verify_expected_yaw_deg").value)))
+        self.consensus = PoseConsensus(
+            int(self.get_parameter("consensus_required_scans").value),
+            float(self.get_parameter("consensus_translation_m").value),
+            math.radians(float(
+                self.get_parameter("consensus_yaw_deg").value)),
+        )
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -167,6 +199,8 @@ class CartographerRelocalizer(Node):
         self.map_msg = None
         self.map_data = None
         self.score_grid = None
+        self.reference_map_lock = ImmutableCrcLock()
+        self.rejected_map_crcs = set()
         self.latest_scan = None
         self.linear_speed = 0.0
         self.angular_speed = 0.0
@@ -203,17 +237,48 @@ class CartographerRelocalizer(Node):
     def _on_map(self, msg):
         if msg.info.width == 0 or msg.info.height == 0:
             return
-        changed = (
-            self.map_msg is None
-            or self.map_msg.info.width != msg.info.width
-            or self.map_msg.info.height != msg.info.height
-            or abs(self.map_msg.info.resolution - msg.info.resolution) > 1e-9
+        origin = msg.info.origin
+        signature = occupancy_grid_crc(
+            msg.info.width,
+            msg.info.height,
+            msg.info.resolution,
+            (
+                origin.position.x,
+                origin.position.y,
+                origin.position.z,
+                origin.orientation.x,
+                origin.orientation.y,
+                origin.orientation.z,
+                origin.orientation.w,
+            ),
+            msg.data,
         )
-        self.map_msg = msg
-        self.map_data = np.asarray(msg.data, dtype=np.int16).reshape(
-            msg.info.height, msg.info.width)
-        if changed or self.score_grid is None:
-            self._build_score_grid()
+        already_locked = self.reference_map_lock.crc is not None
+        accepted = self.reference_map_lock.accept(signature)
+        if already_locked:
+            if not accepted:
+                if signature not in self.rejected_map_crcs:
+                    self.rejected_map_crcs.add(signature)
+                    self.get_logger().error(
+                        "REFERENCE_MAP_MUTATION_REJECTED "
+                        f"locked=0x{self.reference_map_lock.crc:08x} "
+                        f"incoming=0x{signature:08x}; relocalization keeps "
+                        "the originally selected map")
+            return
+
+        self.map_msg = copy.deepcopy(msg)
+        self.map_data = np.asarray(
+            self.map_msg.data, dtype=np.int16).reshape(
+                self.map_msg.info.height, self.map_msg.info.width
+            ).copy()
+        self.map_data.setflags(write=False)
+        self._build_score_grid()
+        self.get_logger().info(
+            "REFERENCE_MAP_LOCKED "
+            f"topic={self.map_topic} crc32=0x{signature:08x} "
+            f"size={msg.info.width}x{msg.info.height} "
+            f"resolution={msg.info.resolution:.6f} "
+            f"origin=({origin.position.x:.3f},{origin.position.y:.3f})")
 
     def _on_scan(self, msg):
         self.latest_scan = msg
@@ -237,6 +302,7 @@ class CartographerRelocalizer(Node):
         self.verify_since = None
         self.search_attempts = 0
         self.next_search_at = 0.0
+        self.consensus.reset()
         self.state = "waiting_stop"
         self.detail = "manual request; Nav2 paused"
         self._publish_ready(False)
@@ -361,6 +427,7 @@ class CartographerRelocalizer(Node):
         self.second_score = second
         if pose is None:
             self.busy = False
+            self.consensus.reset()
             retry_available = (
                 not self.manual_request
                 and self.search_attempts < self.max_auto_attempts
@@ -383,8 +450,39 @@ class CartographerRelocalizer(Node):
                     "distinctive stationary location")
             self._publish_ready(False)
             return
-        self.expected_pose = pose
-        if self._keep_healthy_manual_trajectory(pose):
+        scan_stamp_ns = self._scan_stamp_ns(self.latest_scan)
+        yaw = quaternion_yaw(pose.orientation)
+        consensus = self.consensus.observe(
+            pose.position.x, pose.position.y, yaw, scan_stamp_ns)
+        if consensus.duplicate:
+            self.busy = False
+            self.pending_search = True
+            self.next_search_at = time.monotonic() + self.auto_retry_interval_sec
+            self.state = "consensus_wait"
+            self.detail = "waiting for a newer LiDAR scan timestamp"
+            return
+        if not consensus.ready:
+            self.busy = False
+            self.pending_search = True
+            self.next_search_at = time.monotonic() + self.auto_retry_interval_sec
+            self.state = "consensus_wait"
+            reset_text = " candidate jump reset consensus;" if consensus.reset else ""
+            self.detail = (
+                f"{reset_text} stable matches={consensus.count}/"
+                f"{self.consensus.required_count} pose="
+                f"({consensus.pose[0]:.2f},{consensus.pose[1]:.2f},"
+                f"{math.degrees(consensus.pose[2]):.1f}deg)")
+            self.get_logger().info(f"RELOCALIZATION_CONSENSUS {self.detail}")
+            return
+
+        mean_pose = consensus.pose
+        self.expected_pose = self._pose(*mean_pose)
+        self.get_logger().info(
+            "RELOCALIZATION_CONSENSUS accepted "
+            f"{consensus.count}/{self.consensus.required_count} distinct scans "
+            f"pose=({mean_pose[0]:.2f},{mean_pose[1]:.2f},"
+            f"{math.degrees(mean_pose[2]):.1f}deg)")
+        if self._keep_healthy_manual_trajectory(self.expected_pose):
             return
         self.state = "restarting_trajectory"
         future = self.states_client.call_async(GetTrajectoryStates.Request())
@@ -449,19 +547,19 @@ class CartographerRelocalizer(Node):
 
         if not results:
             return None, 0.0, 0.0
-        results.sort(reverse=True, key=lambda item: item[0])
-        seed = results[0]
-        best = self._refine_match(bx, by, seed, resolution)
-        second = 0.0
-        second_candidate = None
-        for candidate in results[1:]:
-            dx = (candidate[2] - best[2]) * resolution
-            dy = (candidate[1] - best[1]) * resolution
-            dyaw = abs(self._wrap(candidate[3] - best[3]))
-            if math.hypot(dx, dy) > 0.8 or dyaw > math.radians(20.0):
-                second = candidate[0]
-                second_candidate = candidate
-                break
+        refined = refine_distinct_candidates(
+            results,
+            lambda seed: self._refine_match(bx, by, seed, resolution),
+            resolution,
+            self.candidate_cluster_translation_m,
+            self.candidate_cluster_yaw,
+            self.max_refined_candidates,
+        )
+        if not refined:
+            return None, 0.0, 0.0
+        best = refined[0]
+        second_candidate = refined[1] if len(refined) > 1 else None
+        second = second_candidate[0] if second_candidate is not None else 0.0
         score, row, col, yaw = best
         margin = score - second
         best_x = origin_x + col * resolution
@@ -476,7 +574,8 @@ class CartographerRelocalizer(Node):
             f"Relocalization match: best={score:.3f}, second={second:.3f}, "
             f"margin={margin:.3f}, "
             f"best_pose=({best_x:.2f},{best_y:.2f},"
-            f"{math.degrees(yaw):.1f}deg), second_pose={second_text}")
+            f"{math.degrees(yaw):.1f}deg), second_pose={second_text}, "
+            f"refined_clusters={len(refined)}")
         normal_match = score >= self.min_score and margin >= self.min_margin
         strong_match = (
             score >= self.strong_match_score
@@ -700,6 +799,21 @@ class CartographerRelocalizer(Node):
         yaw = math.atan2(
             2.0 * (q.w * q.z + q.x * q.y),
             1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        if self.expected_pose is not None:
+            expected_yaw = quaternion_yaw(self.expected_pose.orientation)
+            expected_distance = math.hypot(
+                transform.transform.translation.x - self.expected_pose.position.x,
+                transform.transform.translation.y - self.expected_pose.position.y,
+            )
+            expected_yaw_error = abs(self._wrap(yaw - expected_yaw))
+            if (expected_distance > self.verify_expected_translation_m
+                    or expected_yaw_error > self.verify_expected_yaw):
+                self.verify_since = None
+                self.detail = (
+                    "fresh Cartographer pose disagrees with multi-scan "
+                    f"consensus: delta={expected_distance:.3f}m/"
+                    f"{math.degrees(expected_yaw_error):.1f}deg")
+                return
         msg = self.map_msg
         row = int(round((transform.transform.translation.y
                          - msg.info.origin.position.y) / msg.info.resolution))
@@ -754,6 +868,7 @@ class CartographerRelocalizer(Node):
         self.pending_search = False
         self.state = "failed"
         self.detail = detail
+        self.consensus.reset()
         self._publish_ready(False)
         self.get_logger().error(detail)
 
@@ -785,6 +900,13 @@ class CartographerRelocalizer(Node):
     @staticmethod
     def _wrap(angle):
         return math.atan2(math.sin(angle), math.cos(angle))
+
+    @staticmethod
+    def _scan_stamp_ns(scan):
+        if scan is None:
+            return 0
+        return int(scan.header.stamp.sec) * 1000000000 + int(
+            scan.header.stamp.nanosec)
 
 
 def main(args=None):

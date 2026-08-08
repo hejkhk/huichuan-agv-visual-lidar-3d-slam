@@ -30,7 +30,9 @@ Item {
                     id: preview
                     anchors.fill: parent
                     anchors.margins: AppMetrics.unit
-                    source: root.visible ? (root.mapData.cache_pgm_url ?? "") : ""
+                    source: root.visible
+                        ? (root.mapData.cache_preview_url ?? root.mapData.cache_pgm_url ?? "")
+                        : ""
                     sourceSize.width: Math.max(
                         1,
                         root.emphasized ? parent.width * 1.25 * Performance.imageScale : parent.width * Performance.imageScale

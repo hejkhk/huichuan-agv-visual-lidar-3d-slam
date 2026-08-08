@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 import logging
 import math
 import os
-import struct
 import threading
 import time
-import zlib
 from typing import Any, Callable
+
+from backend.map_preview import map_signature, occupancy_grid_png
 
 try:
     import rclpy
@@ -44,37 +42,6 @@ def quaternion_to_yaw(x: float, y: float, z: float, w: float) -> float:
     return math.atan2(sin_yaw, cos_yaw)
 
 
-def occupancy_grid_png(data: list[int], width: int, height: int) -> str:
-    """Encode a ROS occupancy grid as a vertically corrected grayscale PNG data URL."""
-    if width <= 0 or height <= 0 or len(data) != width * height:
-        return ""
-
-    def shade(value: int) -> int:
-        if value < 0:
-            return 205
-        if value >= 65:
-            return 35
-        if value <= 10:
-            return 247
-        return max(45, 247 - round(value * 2.1))
-
-    raw = bytearray()
-    for row in range(height - 1, -1, -1):
-        raw.append(0)
-        start = row * width
-        raw.extend(shade(value) for value in data[start : start + width])
-
-    def chunk(kind: bytes, payload: bytes) -> bytes:
-        checksum = binascii.crc32(kind + payload) & 0xFFFFFFFF
-        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", checksum)
-
-    png = b"\x89PNG\r\n\x1a\n"
-    png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
-    png += chunk(b"IDAT", zlib.compress(bytes(raw), 6))
-    png += chunk(b"IEND", b"")
-    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
-
-
 class Ros2Client:
     """Own an isolated ROS context and cache callbacks without blocking Qt.
 
@@ -95,13 +62,8 @@ class Ros2Client:
         self._closed = False
         self._last_map_signature: tuple[Any, ...] | None = None
         self._map_topic = os.getenv("ROBOT_UI_MAP_TOPIC", "/map")
-        self._reference_map_topic = os.getenv(
-            "ROBOT_UI_REFERENCE_MAP_TOPIC", "/localization_reference_map"
-        )
-        self._primary_map_received = False
-        self._last_primary_map_time = 0.0
         self._map_message_count = 0
-        self._last_map_diagnostic_state: tuple[int, int, int] | None = None
+        self._last_map_diagnostic_state: tuple[int, int] | None = None
 
         # --- Map: /map (latched, from map_server) ---
         map_qos = QoSProfile(
@@ -116,19 +78,6 @@ class Ros2Client:
             self._map_callback,
             map_qos,
         )
-        self._reference_map_subscription = None
-        if self._reference_map_topic != self._map_topic:
-            self._reference_map_subscription = self.node.create_subscription(
-                OccupancyGrid,
-                self._reference_map_topic,
-                lambda message: self._map_callback(
-                    message,
-                    topic=self._reference_map_topic,
-                    primary=False,
-                ),
-                map_qos,
-            )
-
         # --- Pose: /amcl_pose (from AMCL) ---
         self.node.create_subscription(
             PoseWithCovarianceStamped,
@@ -283,10 +232,8 @@ class Ros2Client:
 
     def _report_map_subscription(self) -> None:
         primary_publishers = self.node.count_publishers(self._map_topic)
-        reference_publishers = self.node.count_publishers(self._reference_map_topic)
         state = (
             int(primary_publishers),
-            int(reference_publishers),
             int(self._map_message_count),
         )
         if state == self._last_map_diagnostic_state:
@@ -298,29 +245,23 @@ class Ros2Client:
         )
         if self._map_message_count:
             self.log.info(
-                "地图订阅正常：%s publishers=%d，%s publishers=%d，messages=%d，%s",
+                "地图订阅正常：immutable %s publishers=%d，messages=%d，%s",
                 self._map_topic,
                 primary_publishers,
-                self._reference_map_topic,
-                reference_publishers,
                 self._map_message_count,
                 environment,
             )
-        elif primary_publishers or reference_publishers:
+        elif primary_publishers:
             self.log.warning(
-                "已发现地图发布者但尚未收到兼容数据：%s publishers=%d，"
-                "%s publishers=%d，%s",
+                "已发现不可变地图发布者但尚未收到兼容数据：%s publishers=%d，%s",
                 self._map_topic,
                 primary_publishers,
-                self._reference_map_topic,
-                reference_publishers,
                 environment,
             )
         else:
             self.log.warning(
-                "尚未发现地图发布者：%s 与 %s，%s",
+                "尚未发现不可变地图发布者：%s，当前继续显示 Loc_MAP 文件预览，%s",
                 self._map_topic,
-                self._reference_map_topic,
                 environment,
             )
 
@@ -329,30 +270,12 @@ class Ros2Client:
         message: OccupancyGrid,
         *,
         topic: str | None = None,
-        primary: bool = True,
     ) -> None:
         logger = getattr(self, "log", logging.getLogger("ROS"))
         topic = topic or getattr(self, "_map_topic", "/map")
-        if (
-            not primary
-            and time.monotonic() - getattr(self, "_last_primary_map_time", 0.0)
-            < 3.0
-        ):
-            return
         info = message.info
         width = int(info.width)
         height = int(info.height)
-        # Some map servers republish the same latched OccupancyGrid. Hash the
-        # raw signed-byte payload before the expensive Python PNG conversion
-        # so an unchanged map never rebuilds or reuploads a texture.
-        try:
-            if hasattr(message.data, "tobytes"):
-                raw_bytes = message.data.tobytes()
-            else:
-                raw_bytes = bytes((int(value) & 0xFF) for value in message.data)
-        except (TypeError, ValueError, OverflowError):
-            logger.exception("地图数据转换失败：topic=%s", topic)
-            return
         if width <= 0 or height <= 0 or len(message.data) != width * height:
             logger.error(
                 "拒绝无效地图：topic=%s size=%dx%d data=%d",
@@ -362,17 +285,29 @@ class Ros2Client:
                 len(message.data),
             )
             return
-        signature = (
-            width,
-            height,
-            float(info.resolution),
-            float(info.origin.position.x),
-            float(info.origin.position.y),
-            zlib.crc32(raw_bytes) & 0xFFFFFFFF,
-        )
-        if primary:
-            self._primary_map_received = True
-            self._last_primary_map_time = time.monotonic()
+        try:
+            signature = map_signature(
+                message.data,
+                width,
+                height,
+                float(info.resolution),
+                float(info.origin.position.x),
+                float(info.origin.position.y),
+            )
+        except (TypeError, ValueError, OverflowError):
+            logger.exception("地图数据转换失败：topic=%s", topic)
+            return
+        expected = getattr(self.owner, "reference_map_signature", None)
+        if expected is not None and signature != expected:
+            logger.error(
+                "拒绝与所选 Loc_MAP 不一致的 /map：expected_crc=0x%08x "
+                "incoming_crc=0x%08x size=%dx%d",
+                expected[-1],
+                signature[-1],
+                width,
+                height,
+            )
+            return
         if signature == self._last_map_signature:
             return
 
@@ -394,14 +329,15 @@ class Ros2Client:
             }
         )
         logger.info(
-            "地图帧已接收：topic=%s size=%dx%d resolution=%.3fm "
-            "origin=(%.3f,%.3f) revision=%d",
+            "地图帧已接收：source=%s immutable=true size=%dx%d resolution=%.3fm "
+            "origin=(%.3f,%.3f) crc=0x%08x revision=%d",
             topic,
             width,
             height,
             float(info.resolution),
             float(info.origin.position.x),
             float(info.origin.position.y),
+            signature[-1],
             self.owner.snapshot.map_revision,
         )
 

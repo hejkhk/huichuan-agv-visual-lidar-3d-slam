@@ -4282,16 +4282,17 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
 
 ## 2026-08-07 重定位导航地图实时更新与资源审计
 
-- 将所选 YAML/PGM 从 `/map` 分离到只读 `/localization_reference_map`。它只供
-  `cartographer_reloc` 做冷启动和手动重定位，不再直接作为 Nav2 永久静态层。
-- 新增 C++ `mutable_navigation_map_node`，它独占发布 `/map` 和 `/map_updates`。新雷达障碍
+- 所选 YAML/PGM 作为只读 `/map`，只供 `cartographer_reloc`、UI 和原图审计使用。
+- 新增 C++ `mutable_navigation_map_node`，它独占发布 `/navigation_live_map` 和
+  `/navigation_live_map_updates`。新雷达障碍
   连续 3 帧确认后写入；旧占用格经过 20 个不同扫描帧的自由射线确认后清除，证据最高 5 Hz，
   清除通常约 4 秒。未知区不自动清空，地图不越过 PGM 边界扩张。
 - 同一栅格每帧只计一次，清空射线在真实回波前 12 cm 停止。TF 缺失不更新；相邻证据帧
   出现 0.35 m 或 20 度跳变时恢复原参考图、清空证据并冻结 2 秒。
 - 只有 `/localization_ready=true` 才接收实时修改。手动重定位开始后立即冻结并恢复参考图，
   成功后重新积累证据；失败时 Nav2 和地图修改都保持锁定。
-- Nav2 两个 StaticLayer 继续订阅 `/map`，并通过现有 `subscribe_to_updates=true` 消费增量，
+- Nav2 两个 StaticLayer 在重定位模式重映射到 `/navigation_live_map`，并通过现有
+  `subscribe_to_updates=true` 消费对应增量，
   原有 2D 雷达、6/8 秒 STVL、15 秒视觉墙和 C++ 最终碰撞门全部保留。
 - 新增 `/proc` 资源监控，每 20 秒在 `runtime.log` 按相机、Cartographer、RTAB/OctoMap、
   Nav2、3D感知、底盘/雷达、RViz和网页分组输出 CPU、RSS、线程与 I/O；完整数据写入本次
@@ -4332,8 +4333,8 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
 - Humble 原生 `Spin` 只在行为树节点构造时读取 `spin_dist`。日志中预旋转条件算出
   `172 deg`，Behavior Server 却收到 `0.00`。新增 `DynamicSpin`，在每次 tick 时读取
   黑板角度并校验，后方目标和长路径预对向不再执行零角度假旋转。
-- 对照 `dual_3d_2026-08-07_21-27-25`，所选只读参考图一直独立发布在
-  `/localization_reference_map`，实时双地图没有参与重定位打分。错误定位来自单帧候选
+- 对照 `dual_3d_2026-08-07_21-27-25`，所选只读参考图独立发布在 `/map`，导航动态副本没有
+  参与重定位打分。错误定位来自单帧候选
   `0.805/0.784`、仅 `0.021` 的歧义差仍被旧强匹配门放行。现在使用 180 个扫描点，要求
   最低 `0.035` 唯一性差；高分旁路提高到 `0.90`，歧义走廊宁可保持锁车并重试也不猜位置。
 - 手动重定位结束轨迹后，Cartographer 因雷达未来时间戳与较旧 IMU 交错而报
@@ -4342,3 +4343,24 @@ Costmap clearance: measured 66.5cm body + 1cm padding, inflation 0.49m/14.0
   ACTIVE 轨迹、TF 新鲜度和 TF 持续前进后才发布 `/localization_ready=true`。
 - `mutable_navigation_map_node` 的 TF 等待提高到 `0.50 s`，用于吸收 Jetson 正常调度延迟；
   Cartographer 退出或 TF 冻结时仍停止地图更新和 Nav2，不会用错误位姿改写 `/map`。
+
+## 2026-08-08 不可变旧地图与多帧重定位修复
+
+- 对照 `11-11-03`、`11-13-01`、`11-14-25` 三次日志，确认误定位来自相似走廊中的单帧
+  多解，而不是动态地图直接进入扫描匹配。旧实现只精修第一名、使用未精修第二名计算差值，
+  会虚高唯一性；现在最多精修 8 个独立位置/角度簇，再用精修后的前两名计算原有 `0.035`
+  门槛，未降低任何接受阈值。
+- 候选通过分数门后还需 3 个不同雷达时间戳在 `0.35 m/12 deg` 内一致，候选跳变会清零重计。
+  新轨迹启动后的 TF 还必须接近该多帧均值，避免新轨迹用同一错误初值“自证成功”。
+- `cartographer_reloc` 首次读取 `/map` 后深拷贝并锁定完整元数据与栅格 CRC；后续相同重发
+  可接收，任何变更都会记录 `REFERENCE_MAP_MUTATION_REJECTED` 并拒绝。C++ 导航副本节点也
+  独立锁定首份参考 CRC，相同重发不重置证据，变更记录 `NAV_MAP_REFERENCE_MUTATION_REJECTED`。
+- 话题职责统一为：`/map` 是不可变所选旧图；`/navigation_live_map` 和对应 updates 是 Nav2
+  专用可变副本；Cartographer 定位栅格继续使用 `/cartographer_localization_map`。动态障碍、
+  回环恢复和双地图更新都不能修改重定位参考。
+- 启动器对 `/odom`、`/imu_cartographer` 增加底盘进程内发布计数兜底，避免 Jetson 上短命
+  `ros2 topic echo` DDS 发现超时误杀健康进程。Gemini2 无深度或本地点云未就绪时改为安全
+  降级：保留地图、定位、RViz 和 UI，运动门保持锁定，不再主动关闭整套 ROS。
+- UI 进入后直接读取所选 `Loc_MAP` YAML/PGM 并生成 PNG，记录来源、尺寸、分辨率和 CRC；
+  ROS `/map` 只有与文件签名一致才可更新画面。地图卡片也使用 PNG 数据预览，避免 Qt 无法
+  解码 PGM 时出现空白。

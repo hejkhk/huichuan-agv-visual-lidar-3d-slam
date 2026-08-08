@@ -25,6 +25,46 @@ namespace
 {
 constexpr double kPi = 3.14159265358979323846;
 
+uint32_t crc32_bytes(uint32_t crc, const uint8_t * data, size_t size)
+{
+  for (size_t index = 0; index < size; ++index) {
+    crc ^= data[index];
+    for (int bit = 0; bit < 8; ++bit) {
+      const uint32_t mask = 0U - (crc & 1U);
+      crc = (crc >> 1U) ^ (0xEDB88320U & mask);
+    }
+  }
+  return crc;
+}
+
+template<typename ValueT>
+uint32_t crc32_value(uint32_t crc, const ValueT & value)
+{
+  return crc32_bytes(
+    crc, reinterpret_cast<const uint8_t *>(&value), sizeof(ValueT));
+}
+
+uint32_t occupancy_grid_crc32(const nav_msgs::msg::OccupancyGrid & map)
+{
+  uint32_t crc = 0xFFFFFFFFU;
+  crc = crc32_value(crc, map.info.width);
+  crc = crc32_value(crc, map.info.height);
+  crc = crc32_value(crc, map.info.resolution);
+  const auto & pose = map.info.origin;
+  crc = crc32_value(crc, pose.position.x);
+  crc = crc32_value(crc, pose.position.y);
+  crc = crc32_value(crc, pose.position.z);
+  crc = crc32_value(crc, pose.orientation.x);
+  crc = crc32_value(crc, pose.orientation.y);
+  crc = crc32_value(crc, pose.orientation.z);
+  crc = crc32_value(crc, pose.orientation.w);
+  if (!map.data.empty()) {
+    crc = crc32_bytes(
+      crc, reinterpret_cast<const uint8_t *>(map.data.data()), map.data.size());
+  }
+  return crc ^ 0xFFFFFFFFU;
+}
+
 double normalize_angle(double angle)
 {
   while (angle > kPi) {
@@ -58,9 +98,11 @@ public:
     tf_listener_(std::make_shared<tf2_ros::TransformListener>(*tf_buffer_))
   {
     reference_topic_ = declare_parameter<std::string>(
-      "reference_map_topic", "/localization_reference_map");
-    output_topic_ = declare_parameter<std::string>("output_map_topic", "/map");
-    update_topic_ = declare_parameter<std::string>("update_topic", "/map_updates");
+      "reference_map_topic", "/map");
+    output_topic_ = declare_parameter<std::string>(
+      "output_map_topic", "/navigation_live_map");
+    update_topic_ = declare_parameter<std::string>(
+      "update_topic", "/navigation_live_map_updates");
     scan_topic_ = declare_parameter<std::string>(
       "scan_topic", "/scan_timed_v2_filtered");
     ready_topic_ = declare_parameter<std::string>(
@@ -167,6 +209,19 @@ private:
       return;
     }
 
+    const uint32_t incoming_crc = occupancy_grid_crc32(*msg);
+    if (reference_locked_) {
+      if (incoming_crc != reference_crc32_) {
+        RCLCPP_ERROR(
+          get_logger(),
+          "NAV_MAP_REFERENCE_MUTATION_REJECTED locked=0x%08x incoming=0x%08x",
+          reference_crc32_, incoming_crc);
+      }
+      return;
+    }
+    reference_locked_ = true;
+    reference_crc32_ = incoming_crc;
+
     reference_map_ = *msg;
     reference_map_.header.frame_id = map_frame_;
     current_map_ = reference_map_;
@@ -192,10 +247,10 @@ private:
     publish_full_map();
     RCLCPP_INFO(
       get_logger(),
-      "NAV_MAP_REFERENCE loaded=%ux%u resolution=%.3fm cells=%zu; "
-      "source remains immutable",
+      "NAV_MAP_REFERENCE loaded=%ux%u resolution=%.3fm cells=%zu "
+      "crc32=0x%08x; source remains immutable",
       current_map_.info.width, current_map_.info.height,
-      current_map_.info.resolution, expected);
+      current_map_.info.resolution, expected, reference_crc32_);
   }
 
   void on_localization_ready(const std_msgs::msg::Bool::SharedPtr msg)
@@ -685,6 +740,9 @@ private:
   std::string ready_topic_;
   std::string correction_hold_topic_;
   std::string map_frame_;
+
+  bool reference_locked_{false};
+  uint32_t reference_crc32_{0U};
   int occupied_threshold_{65};
   int mark_confirmations_{3};
   int clear_confirmations_{20};

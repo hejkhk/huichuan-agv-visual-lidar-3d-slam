@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from array import array
-import time
 from types import SimpleNamespace
 
 from robot_api.ros2_client import Ros2Client
@@ -11,6 +10,7 @@ class _Owner:
     def __init__(self) -> None:
         self.snapshot = SimpleNamespace(map_revision=0)
         self.updates: list[dict[str, object]] = []
+        self.reference_map_signature = None
 
     def update_map(self, payload: dict[str, object]) -> None:
         self.updates.append(payload)
@@ -52,38 +52,25 @@ def test_changed_map_still_publishes_a_new_revision() -> None:
     assert [item["map_revision"] for item in client.owner.updates] == [1, 2]
 
 
-def test_reference_map_is_a_fallback_until_primary_map_arrives() -> None:
+def test_ros_map_must_match_selected_filesystem_reference() -> None:
     client = Ros2Client.__new__(Ros2Client)
     client.owner = _Owner()
     client._last_map_signature = None
-    client._primary_map_received = False
-    client._last_primary_map_time = 0.0
     client._map_message_count = 0
+    expected_message = _message(array("b", [100, 0, -1, 50]))
+    info = expected_message.info
+    from backend.map_preview import map_signature
 
-    client._map_callback(
-        _message(array("b", [100, 0, -1, 40])),
-        topic="/localization_reference_map",
-        primary=False,
+    client.owner.reference_map_signature = map_signature(
+        expected_message.data,
+        info.width,
+        info.height,
+        info.resolution,
+        info.origin.position.x,
+        info.origin.position.y,
     )
-    client._map_callback(
-        _message(array("b", [100, 0, -1, 50])),
-        topic="/map",
-        primary=True,
-    )
-    client._map_callback(
-        _message(array("b", [100, 0, -1, 60])),
-        topic="/localization_reference_map",
-        primary=False,
-    )
+    client._map_callback(expected_message, topic="/map")
+    client._map_callback(_message(array("b", [100, 0, -1, 60])), topic="/map")
 
-    assert client._primary_map_received is True
-    assert [item["map_revision"] for item in client.owner.updates] == [1, 2]
-    assert client.owner.updates[-1]["map_image"]
-
-    client._last_primary_map_time = time.monotonic() - 4.0
-    client._map_callback(
-        _message(array("b", [100, 0, -1, 60])),
-        topic="/localization_reference_map",
-        primary=False,
-    )
-    assert [item["map_revision"] for item in client.owner.updates] == [1, 2, 3]
+    assert [item["map_revision"] for item in client.owner.updates] == [1]
+    assert client.owner.updates[0]["map_image"]

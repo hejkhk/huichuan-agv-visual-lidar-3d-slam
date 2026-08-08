@@ -39,7 +39,7 @@ def test_existing_map_subscription_contract_is_preserved():
     ros_client = _text("robot_api/ros2_client.py")
 
     assert 'ROBOT_UI_MAP_TOPIC", "/map"' in ros_client
-    assert 'ROBOT_UI_REFERENCE_MAP_TOPIC", "/localization_reference_map"' in ros_client
+    assert "reference_map_signature" in ros_client
     assert "_map_callback" in ros_client
     assert "_report_map_subscription" in ros_client
     assert "OccupancyGrid" in ros_client
@@ -54,7 +54,7 @@ def test_integrated_launcher_uses_the_slam_dds_profile():
     for launcher in (ui_launcher, combined_launcher):
         assert "rmw_cyclonedds_cpp" in launcher
         assert "cyclonedds_dual_3d.xml" in launcher
-        assert "ROBOT_UI_REFERENCE_MAP_TOPIC" in launcher
+        assert "ROBOT_UI_MAP_TOPIC" in launcher
 
 
 def test_saved_and_temporary_targets_are_mutually_exclusive():
