@@ -168,6 +168,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "local_persistent_sensor_cloud_topic",
             default_value="/local_highres_cloud_v21/persistent_sensor"),
+        DeclareLaunchArgument(
+            "local_immediate_obstacle_topic",
+            default_value="/local_highres_cloud_v21/immediate_obstacles"),
         DeclareLaunchArgument("local_stats_topic", default_value="/local_highres_cloud_v21/stats"),
         DeclareLaunchArgument("local_marker_topic", default_value="/local_highres_cloud_v21/crop_markers"),
         DeclareLaunchArgument("local_rate", default_value="15.0"),
@@ -486,6 +489,8 @@ def generate_launch_description():
             "sensor_output_topic": LaunchConfiguration("local_sensor_cloud_topic"),
             "persistent_sensor_output_topic": LaunchConfiguration(
                 "local_persistent_sensor_cloud_topic"),
+            "immediate_obstacle_output_topic": LaunchConfiguration(
+                "local_immediate_obstacle_topic"),
             "clear_sensor_output_topic": "/local_highres_cloud_v21/clear_sensor",
             "stats_topic": LaunchConfiguration("local_stats_topic"),
             "marker_topic": LaunchConfiguration("local_marker_topic"),
@@ -515,10 +520,10 @@ def generate_launch_description():
             "persistent_mark_max_gap_frames": 1,
             "persistent_mark_neighbor_radius": 1,
             "persistent_geometry_guard_enabled": True,
-            "recent_mark_ground_guard_height_m": 0.050,
-            "recent_mark_min_vertical_span_m": 0.030,
-            "persistent_mark_ground_guard_height_m": 0.080,
-            "persistent_mark_min_vertical_span_m": 0.060,
+            "recent_mark_ground_guard_height_m": 0.120,
+            "recent_mark_min_vertical_span_m": 0.025,
+            "persistent_mark_ground_guard_height_m": 0.150,
+            "persistent_mark_min_vertical_span_m": 0.040,
             "mark_geometry_neighbor_radius": 1,
             "transform_timeout": 0.50,
             # Jetson end-to-end capture age is normally 145-185 ms. Stream
@@ -576,7 +581,7 @@ def generate_launch_description():
         output="screen",
         condition=IfCondition(LaunchConfiguration("enable_navigation")),
         parameters=[{
-            "input_topic": LaunchConfiguration("local_cloud_topic"),
+            "input_topic": LaunchConfiguration("local_immediate_obstacle_topic"),
             "scan_topic": LaunchConfiguration("filtered_scan_topic"),
             "stop_topic": "/local_cloud_collision_stop",
             "status_topic": "/local_cloud_collision_status",

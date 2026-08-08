@@ -18,7 +18,7 @@ RVIZ_PID=""
 OCTOMAP_OUTPUT_PATH=""
 STOP_REASON="unexpected_shell_exit"
 SHUTDOWN_REQUESTED=false
-LOCAL_CLOUD_PIPELINE_VERSION="v6.35"
+LOCAL_CLOUD_PIPELINE_VERSION="v6.36"
 STACK_MODE="${DUAL_3D_STACK_MODE:-unknown}"
 LOCALIZATION_MAP_NAME="${DUAL_3D_LOCALIZATION_MAP_NAME:-}"
 STACK_STATE_DIR="$HOME/.cache/huichuan_agv"
@@ -446,6 +446,23 @@ usb_attr() {
   return 1
 }
 
+persistent_serial_alias() {
+  local port="$1" resolved="" link=""
+  [ -n "$port" ] || return 1
+  case "$port" in
+    /dev/serial/by-id/*) printf '%s\n' "$port"; return 0 ;;
+  esac
+  resolved="$(readlink -f "$port" 2>/dev/null || true)"
+  for link in /dev/serial/by-id/*; do
+    [ -e "$link" ] || continue
+    if [ "$(readlink -f "$link" 2>/dev/null || true)" = "$resolved" ]; then
+      printf '%s\n' "$link"
+      return 0
+    fi
+  done
+  printf '%s\n' "$port"
+}
+
 auto_detect_ports() {
   local dev product
   for dev in /dev/ttyACM* /dev/ttyUSB*; do
@@ -460,6 +477,10 @@ auto_detect_ports() {
   if [ -z "${LIDAR_PORT:-}" ]; then
     if [ -e /dev/ttyACM0 ]; then LIDAR_PORT=/dev/ttyACM0; else LIDAR_PORT=/dev/ttyUSB1; fi
   fi
+  # ttyACM/ttyUSB indices can change after a USB reset. Keep both drivers on
+  # their stable udev aliases so reconnect attempts target the same hardware.
+  CHASSIS_PORT="$(persistent_serial_alias "$CHASSIS_PORT")"
+  LIDAR_PORT="$(persistent_serial_alias "$LIDAR_PORT")"
 }
 
 serial_device_report() {
@@ -1506,6 +1527,7 @@ cmd=(ros2 launch lidar_py dual_resolution_3d_slam.launch.py
   "local_cloud_topic:=${LOCAL_CLOUD_TOPIC:-/local_highres_cloud_v21}"
   "local_sensor_cloud_topic:=${LOCAL_SENSOR_CLOUD_TOPIC:-/local_highres_cloud_v21/sensor}"
   "local_persistent_sensor_cloud_topic:=${LOCAL_PERSISTENT_SENSOR_CLOUD_TOPIC:-/local_highres_cloud_v21/persistent_sensor}"
+  "local_immediate_obstacle_topic:=${LOCAL_IMMEDIATE_OBSTACLE_TOPIC:-/local_highres_cloud_v21/immediate_obstacles}"
   "local_stats_topic:=${LOCAL_STATS_TOPIC:-/local_highres_cloud_v21/stats}"
   "local_marker_topic:=${LOCAL_MARKER_TOPIC:-/local_highres_cloud_v21/crop_markers}"
   "local_rate:=${LOCAL_RATE:-15.0}"

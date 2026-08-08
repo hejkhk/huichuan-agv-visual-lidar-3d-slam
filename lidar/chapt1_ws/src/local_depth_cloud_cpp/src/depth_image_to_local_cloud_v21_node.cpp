@@ -43,7 +43,8 @@ using visualization_msgs::msg::Marker;
 using visualization_msgs::msg::MarkerArray;
 
 constexpr float kInvalidFloat = std::numeric_limits<float>::quiet_NaN();
-constexpr char kPipelineVersion[] = "v6.35";
+constexpr char kPipelineVersion[] = "v6.36";
+constexpr size_t kClearRaySubsample = 4U;
 
 bool host_is_big_endian()
 {
@@ -304,6 +305,8 @@ public:
       "sensor_output_topic", "/local_highres_cloud_v21/sensor");
     persistent_sensor_output_topic_ = declare_parameter<std::string>(
       "persistent_sensor_output_topic", "/local_highres_cloud_v21/persistent_sensor");
+    immediate_obstacle_output_topic_ = declare_parameter<std::string>(
+      "immediate_obstacle_output_topic", "/local_highres_cloud_v21/immediate_obstacles");
     clear_sensor_output_topic_ = declare_parameter<std::string>(
       "clear_sensor_output_topic", "/local_highres_cloud_v21/clear_sensor");
     stats_topic_ = declare_parameter<std::string>(
@@ -346,13 +349,13 @@ public:
     persistent_geometry_guard_enabled_ = declare_parameter<bool>(
       "persistent_geometry_guard_enabled", true);
     recent_mark_ground_guard_height_m_ = declare_parameter<double>(
-      "recent_mark_ground_guard_height_m", 0.05);
+      "recent_mark_ground_guard_height_m", 0.12);
     recent_mark_min_vertical_span_m_ = declare_parameter<double>(
-      "recent_mark_min_vertical_span_m", 0.03);
+      "recent_mark_min_vertical_span_m", 0.025);
     persistent_mark_ground_guard_height_m_ = declare_parameter<double>(
-      "persistent_mark_ground_guard_height_m", 0.08);
+      "persistent_mark_ground_guard_height_m", 0.15);
     persistent_mark_min_vertical_span_m_ = declare_parameter<double>(
-      "persistent_mark_min_vertical_span_m", 0.06);
+      "persistent_mark_min_vertical_span_m", 0.04);
     mark_geometry_neighbor_radius_ = std::clamp(
       static_cast<int>(declare_parameter<int64_t>(
         "mark_geometry_neighbor_radius", 1)), 0, 3);
@@ -431,6 +434,8 @@ public:
     sensor_cloud_pub_ = create_publisher<PointCloud2>(sensor_output_topic_, sensor_qos);
     persistent_sensor_cloud_pub_ = create_publisher<PointCloud2>(
       persistent_sensor_output_topic_, sensor_qos);
+    immediate_obstacle_cloud_pub_ = create_publisher<PointCloud2>(
+      immediate_obstacle_output_topic_, sensor_qos);
     clear_sensor_cloud_pub_ = create_publisher<PointCloud2>(
       clear_sensor_output_topic_, sensor_qos);
     stats_pub_ = create_publisher<std_msgs::msg::String>(stats_topic_, rclcpp::QoS(10));
@@ -770,8 +775,19 @@ private:
     points_buffer_.reserve(ray_table_.size());
     sensor_points_buffer_.clear();
     sensor_points_buffer_.reserve(ray_table_.size());
+    immediate_obstacle_points_buffer_.clear();
+    immediate_obstacle_points_buffer_.reserve(ray_table_.size());
     confirmed_sensor_points_buffer_.clear();
     confirmed_sensor_points_buffer_.reserve(ray_table_.size());
+    persistent_sensor_points_buffer_.clear();
+    persistent_sensor_points_buffer_.reserve(ray_table_.size());
+    raw_points_buffer_.clear();
+    raw_points_buffer_.reserve(ray_table_.size());
+    raw_sensor_points_buffer_.clear();
+    raw_sensor_points_buffer_.reserve(ray_table_.size());
+    clear_sensor_points_buffer_.clear();
+    clear_sensor_points_buffer_.reserve(
+      (ray_table_.size() + kClearRaySubsample - 1U) / kClearRaySubsample);
     voxel_keys_buffer_.clear();
     voxel_keys_buffer_.reserve(ray_table_.size());
     temporal_depth_buffer_.assign(ray_table_.size(), kInvalidFloat);
@@ -1059,11 +1075,24 @@ private:
 
   void build_persistent_mark_cloud(const GroundPlane & ground_plane)
   {
+    immediate_obstacle_points_buffer_.clear();
     confirmed_sensor_points_buffer_.clear();
     persistent_sensor_points_buffer_.clear();
     latest_temporally_confirmed_mark_points_.store(0U);
     persistent_mark_counts_buffer_.resize(points_buffer_.size());
     build_current_vertical_columns(ground_plane);
+
+    // The hard collision gate reacts to the current frame without temporal
+    // delay, but does not receive the calibrated floor ripple.
+    for (size_t index = 0U; index < points_buffer_.size(); ++index) {
+      if (geometry_qualified_mark(
+          index, ground_plane,
+          recent_mark_ground_guard_height_m_,
+          recent_mark_min_vertical_span_m_))
+      {
+        immediate_obstacle_points_buffer_.push_back(points_buffer_[index]);
+      }
+    }
 
     const auto append_confirmed_point =
       [this, &ground_plane](size_t index)
@@ -1556,22 +1585,30 @@ private:
 
     auto cloud = make_xyz_cloud(image.header, output_frame_, points_buffer_);
     cloud_pub_->publish(cloud);
-    auto immediate_sensor_cloud = make_xyz_cloud(
-      image.header, image.header.frame_id, sensor_points_buffer_);
+    auto immediate_obstacle_cloud = make_xyz_cloud(
+      image.header, output_frame_, immediate_obstacle_points_buffer_);
+    clear_sensor_points_buffer_.clear();
+    for (size_t index = 0U; index < raw_sensor_points_buffer_.size();
+      index += kClearRaySubsample)
+    {
+      clear_sensor_points_buffer_.push_back(raw_sensor_points_buffer_[index]);
+    }
+    auto raw_clear_sensor_cloud = make_xyz_cloud(
+      image.header, image.header.frame_id, clear_sensor_points_buffer_);
     auto confirmed_sensor_cloud = make_xyz_cloud(
       image.header, image.header.frame_id, confirmed_sensor_points_buffer_);
     auto persistent_sensor_cloud = make_xyz_cloud(
       image.header, image.header.frame_id, persistent_sensor_points_buffer_);
-    // Marking and clearing deliberately use separate topics. Sparse or
-    // partially invalid depth must pass temporal and geometry checks before it
-    // enters navigation memory. The immediate base-frame cloud still drives
-    // the collision gate, so these checks never weaken hard stopping.
+    // Marking, collision checking and clearing use separate topics. Raw valid
+    // depth rays remain in the clearing cloud so reversing can erase stale
+    // voxels even when the endpoint itself is classified as floor.
     sensor_cloud_pub_->publish(confirmed_sensor_cloud);
     persistent_sensor_cloud_pub_->publish(persistent_sensor_cloud);
+    immediate_obstacle_cloud_pub_->publish(immediate_obstacle_cloud);
     const double valid_depth_ratio = ray_table_.empty() ? 0.0 :
       static_cast<double>(valid_depth_pixels) / static_cast<double>(ray_table_.size());
     if (valid_depth_ratio >= min_clear_valid_depth_ratio_) {
-      clear_sensor_cloud_pub_->publish(immediate_sensor_cloud);
+      clear_sensor_cloud_pub_->publish(raw_clear_sensor_cloud);
       ++clear_qualified_frames_;
     } else {
       ++clear_suppressed_frames_;
@@ -1605,6 +1642,8 @@ private:
       latest_sampled_pixels_ = ray_table_.size();
       latest_valid_depth_pixels_ = valid_depth_pixels;
       latest_output_points_ = points_buffer_.size();
+      latest_immediate_obstacle_points_ = immediate_obstacle_points_buffer_.size();
+      latest_clear_sensor_points_ = clear_sensor_points_buffer_.size();
       latest_confirmed_mark_points_ = confirmed_sensor_points_buffer_.size();
       latest_persistent_mark_points_ = persistent_sensor_points_buffer_.size();
     }
@@ -1634,6 +1673,8 @@ private:
     size_t sampled_pixels = 0U;
     size_t valid_pixels = 0U;
     size_t output_points = 0U;
+    size_t immediate_obstacle_points = 0U;
+    size_t clear_sensor_points = 0U;
     size_t recent_mark_points = 0U;
     size_t persistent_mark_points = 0U;
     uint32_t image_width = 0U;
@@ -1660,6 +1701,8 @@ private:
       sampled_pixels = latest_sampled_pixels_;
       valid_pixels = latest_valid_depth_pixels_;
       output_points = latest_output_points_;
+      immediate_obstacle_points = latest_immediate_obstacle_points_;
+      clear_sensor_points = latest_clear_sensor_points_;
       recent_mark_points = latest_confirmed_mark_points_;
       persistent_mark_points = latest_persistent_mark_points_;
       image_width = latest_image_width_;
@@ -1702,6 +1745,8 @@ private:
          << "\"sampled_pixels\":" << sampled_pixels << ","
          << "\"valid_depth_pixels\":" << valid_pixels << ","
          << "\"output_points\":" << output_points << ","
+         << "\"immediate_obstacle_points\":" << immediate_obstacle_points << ","
+         << "\"clear_sensor_points\":" << clear_sensor_points << ","
          << "\"temporally_confirmed_points\":" <<
               latest_temporally_confirmed_mark_points_.load() << ","
          << "\"recent_mark_points\":" << recent_mark_points << ","
@@ -1790,7 +1835,8 @@ private:
       "STEP10V2.1 %ux%u -> %zu live / %zu temporal / %zu recent / %zu persistent pts | "
       "process avg/p95/max %.1f/%.1f/%.1f ms | "
       "age avg/p95/max %.1f/%.1f/%.1f ms | in/out %.1f/%.1f Hz | gap max %.1f ms | "
-      "ground valid=%s plane=(%.4f,%.4f,%.4f) inliers=%zu/%zu removed=%zu+%zu",
+      "ground valid=%s plane=(%.4f,%.4f,%.4f) inliers=%zu/%zu removed=%zu+%zu "
+      "immediate=%zu clear_rays=%zu",
       image_width, image_height, output_points,
       latest_temporally_confirmed_mark_points_.load(),
       recent_mark_points, persistent_mark_points,
@@ -1800,7 +1846,8 @@ private:
       latest_ground_plane_valid_.load() ? "true" : "false",
       latest_ground_plane_a_.load(), latest_ground_plane_b_.load(), latest_ground_plane_c_.load(),
       latest_ground_plane_inliers_.load(), latest_ground_plane_candidates_.load(),
-      latest_ground_removed_.load(), latest_ground_speckles_removed_.load());
+      latest_ground_removed_.load(), latest_ground_speckles_removed_.load(),
+      immediate_obstacle_points, clear_sensor_points);
   }
 
   void publish_markers()
@@ -1836,6 +1883,7 @@ private:
   std::string output_topic_;
   std::string sensor_output_topic_;
   std::string persistent_sensor_output_topic_;
+  std::string immediate_obstacle_output_topic_;
   std::string clear_sensor_output_topic_;
   std::string stats_topic_;
   std::string marker_topic_;
@@ -1861,10 +1909,10 @@ private:
   int persistent_mark_max_gap_frames_{1};
   int persistent_mark_neighbor_radius_{1};
   bool persistent_geometry_guard_enabled_{true};
-  double recent_mark_ground_guard_height_m_{0.05};
-  double recent_mark_min_vertical_span_m_{0.03};
-  double persistent_mark_ground_guard_height_m_{0.08};
-  double persistent_mark_min_vertical_span_m_{0.06};
+  double recent_mark_ground_guard_height_m_{0.12};
+  double recent_mark_min_vertical_span_m_{0.025};
+  double persistent_mark_ground_guard_height_m_{0.15};
+  double persistent_mark_min_vertical_span_m_{0.04};
   int mark_geometry_neighbor_radius_{1};
   double transform_timeout_sec_{0.50};
   double max_input_age_ms_{150.0};
@@ -1933,10 +1981,12 @@ private:
   std::vector<RaySample> ray_table_;
   std::vector<Vec3f> points_buffer_;
   std::vector<Vec3f> sensor_points_buffer_;
+  std::vector<Vec3f> immediate_obstacle_points_buffer_;
   std::vector<Vec3f> confirmed_sensor_points_buffer_;
   std::vector<Vec3f> persistent_sensor_points_buffer_;
   std::vector<Vec3f> raw_points_buffer_;
   std::vector<Vec3f> raw_sensor_points_buffer_;
+  std::vector<Vec3f> clear_sensor_points_buffer_;
   std::vector<size_t> voxel_keys_buffer_;
   std::vector<uint8_t> persistent_mark_counts_buffer_;
   std::vector<float> temporal_depth_buffer_;
@@ -1971,6 +2021,7 @@ private:
   rclcpp::Publisher<PointCloud2>::SharedPtr cloud_pub_;
   rclcpp::Publisher<PointCloud2>::SharedPtr sensor_cloud_pub_;
   rclcpp::Publisher<PointCloud2>::SharedPtr persistent_sensor_cloud_pub_;
+  rclcpp::Publisher<PointCloud2>::SharedPtr immediate_obstacle_cloud_pub_;
   rclcpp::Publisher<PointCloud2>::SharedPtr clear_sensor_cloud_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr stats_pub_;
   rclcpp::Publisher<MarkerArray>::SharedPtr marker_pub_;
@@ -1998,6 +2049,8 @@ private:
   size_t latest_sampled_pixels_{0U};
   size_t latest_valid_depth_pixels_{0U};
   size_t latest_output_points_{0U};
+  size_t latest_immediate_obstacle_points_{0U};
+  size_t latest_clear_sensor_points_{0U};
   size_t latest_confirmed_mark_points_{0U};
   size_t latest_persistent_mark_points_{0U};
   uint32_t latest_image_width_{0U};

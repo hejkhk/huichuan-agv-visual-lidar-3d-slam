@@ -426,11 +426,12 @@ for contract in (
     '"persistent_mark_max_gap_frames": 1',
     '"persistent_mark_neighbor_radius": 1',
     '"persistent_geometry_guard_enabled": True',
-    '"recent_mark_ground_guard_height_m": 0.050',
-    '"recent_mark_min_vertical_span_m": 0.030',
-    '"persistent_mark_ground_guard_height_m": 0.080',
-    '"persistent_mark_min_vertical_span_m": 0.060',
+    '"recent_mark_ground_guard_height_m": 0.120',
+    '"recent_mark_min_vertical_span_m": 0.025',
+    '"persistent_mark_ground_guard_height_m": 0.150',
+    '"persistent_mark_min_vertical_span_m": 0.040',
     '"mark_geometry_neighbor_radius": 1',
+    '"input_topic": LaunchConfiguration("local_immediate_obstacle_topic")',
 ):
     if contract not in dual_launch:
         raise SystemExit(
@@ -445,7 +446,8 @@ for contract in (
     "geometry_qualified_mark(",
     "sensor_cloud_pub_->publish(confirmed_sensor_cloud)",
     "persistent_sensor_cloud_pub_->publish(persistent_sensor_cloud)",
-    "clear_sensor_cloud_pub_->publish(immediate_sensor_cloud)",
+    "immediate_obstacle_cloud_pub_->publish(immediate_obstacle_cloud)",
+    "clear_sensor_cloud_pub_->publish(raw_clear_sensor_cloud)",
     "Suppressing STVL clearing",
 ):
     if contract not in depth_cloud_cpp:
@@ -475,7 +477,8 @@ for contract in (
     "CARTOGRAPHER_ODOM_TOPIC=/odometry/filtered",
     "RTABMAP_ODOM_TOPIC=/cartographer_pose_odom",
     "check_pkg nav2_rviz_plugins",
-    'LOCAL_CLOUD_PIPELINE_VERSION="v6.35"',
+    'LOCAL_CLOUD_PIPELINE_VERSION="v6.36"',
+    "persistent_serial_alias()",
     "reset_cached_package local_depth_cloud_cpp",
     "require_system_ready_for_motion:=$ENABLE_NAVIGATION",
     "navi_motion_watchdog_pose_enabled:",

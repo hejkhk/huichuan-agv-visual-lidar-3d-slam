@@ -65,7 +65,7 @@ local_costmap:
         rgbd_mark:
           data_type: PointCloud2
           # Three-frame-confirmed points also pass the recent geometry grade:
-          # >=5 cm above the fitted floor, or a >=3 cm nearby vertical edge.
+          # >=12 cm above the floor, or a >=2.5 cm nearby vertical edge.
           topic: /local_highres_cloud_v21/sensor
           marking: true
           clearing: false

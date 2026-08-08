@@ -65,5 +65,33 @@ def test_local_cloud_binary_and_launcher_use_same_pipeline_version():
           "depth_image_to_local_cloud_v21_node.cpp"
     ).read_text(encoding="utf-8")
 
-    assert 'LOCAL_CLOUD_PIPELINE_VERSION="v6.35"' in runner
-    assert 'constexpr char kPipelineVersion[] = "v6.35"' in source
+    assert 'LOCAL_CLOUD_PIPELINE_VERSION="v6.36"' in runner
+    assert 'constexpr char kPipelineVersion[] = "v6.36"' in source
+
+
+def test_navigation_cloud_separates_mark_clear_and_collision_inputs():
+    launch = (
+        PROJECT_ROOT
+        / "lidar/chapt1_ws/src/lidar_py/launch/dual_resolution_3d_slam.launch.py"
+    ).read_text(encoding="utf-8")
+    source = (
+        PROJECT_ROOT
+        / "lidar/chapt1_ws/src/local_depth_cloud_cpp/src/"
+          "depth_image_to_local_cloud_v21_node.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert '"input_topic": LaunchConfiguration("local_immediate_obstacle_topic")' in launch
+    assert '"recent_mark_ground_guard_height_m": 0.120' in launch
+    assert '"persistent_mark_ground_guard_height_m": 0.150' in launch
+    assert "immediate_obstacle_cloud_pub_->publish(immediate_obstacle_cloud)" in source
+    assert "raw_sensor_points_buffer_" in source
+    assert "clear_sensor_cloud_pub_->publish(raw_clear_sensor_cloud)" in source
+
+
+def test_launcher_prefers_persistent_serial_aliases():
+    runner = (
+        PROJECT_ROOT / "visual_laser_slam/run_dual_resolution_3d_slam.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "persistent_serial_alias()" in runner
+    assert 'LIDAR_PORT="$(persistent_serial_alias "$LIDAR_PORT")"' in runner

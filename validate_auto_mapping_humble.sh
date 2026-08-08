@@ -496,10 +496,12 @@ depth_cloud = (
     "depth_image_to_local_cloud_v21_node.cpp"
 ).read_text(encoding="utf-8")
 for required in (
-        'constexpr char kPipelineVersion[] = "v6.35"',
+        'constexpr char kPipelineVersion[] = "v6.36"',
         "if (ground_filter_enabled_)",
         "ground_plane_remove_above_ : ground_z_max_",
-        "residual > speckle_lower_bound"):
+        "residual > speckle_lower_bound",
+        "clear_sensor_cloud_pub_->publish(raw_clear_sensor_cloud)",
+        "immediate_obstacle_cloud_pub_->publish(immediate_obstacle_cloud)"):
     if required not in depth_cloud:
         raise SystemExit(f"fixed-ground speckle filter contract missing: {required}")
 bringup = (root / "lidar_py" / "localization_bringup.py").read_text(encoding="utf-8")
@@ -513,7 +515,8 @@ for required in (
             f"localization bringup lost the in-process motion gate: {required}")
 runner = (root.parents[3] / "visual_laser_slam" / "run_dual_resolution_3d_slam.sh").read_text(encoding="utf-8")
 for required in (
-        'LOCAL_CLOUD_PIPELINE_VERSION="v6.35"',
+        'LOCAL_CLOUD_PIPELINE_VERSION="v6.36"',
+        "persistent_serial_alias()",
         'fixed_scan_min_raw_points:=${FIXED_SCAN_MIN_RAW_POINTS:-180}',
         'fixed_scan_min_valid_points:=${FIXED_SCAN_MIN_VALID_POINTS:-0}',
         'RGBD_SYNC_WARN_P95_MS:-45.0'):
