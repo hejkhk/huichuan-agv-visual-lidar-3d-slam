@@ -409,6 +409,7 @@ class UiBackend(QObject):
                 if source != self._map_image_source:
                     self._map_image_source = source
                     self.mapImageChanged.emit()
+                    self.log.info("地图图像解码完成：revision=%d", revision)
             elif revision == self._map_image_revision:
                 self.log.warning("地图图像解码失败，保留上一版本画面")
 
@@ -483,6 +484,8 @@ class UiBackend(QObject):
         topic_lines = [
             "ROS 2 公共消息与连接状态",
             f"ROS_DOMAIN_ID={os.getenv('ROS_DOMAIN_ID', '未设置')}",
+            f"RMW_IMPLEMENTATION={os.getenv('RMW_IMPLEMENTATION', '默认')}",
+            f"CYCLONEDDS_URI={os.getenv('CYCLONEDDS_URI', '未设置')}",
             f"API={type(self.api).__name__}",
         ]
         stack_manager = getattr(self.api, "_stack", None)
@@ -866,6 +869,13 @@ class UiBackend(QObject):
     def _synchronize_maps(self) -> ApiResult[list[dict[str, Any]]]:
         success = self.map_sync_manager.synchronize()
         maps = self.map_manager.refresh_maps(force=True)
+        self.log.info(
+            "地图目录同步结果：source=%s cache=%s maps=%d names=%s",
+            self.map_sync_manager.map_dir,
+            self.map_sync_manager.cache_dir,
+            len(maps),
+            ",".join(str(item.get("name", "")) for item in maps) or "none",
+        )
         if not success:
             state = self.map_sync_manager.snapshot()
             errors = state.get("errors", [])

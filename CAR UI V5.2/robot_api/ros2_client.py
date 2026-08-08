@@ -94,6 +94,14 @@ class Ros2Client:
         self.executor.add_node(self.node)
         self._closed = False
         self._last_map_signature: tuple[Any, ...] | None = None
+        self._map_topic = os.getenv("ROBOT_UI_MAP_TOPIC", "/map")
+        self._reference_map_topic = os.getenv(
+            "ROBOT_UI_REFERENCE_MAP_TOPIC", "/localization_reference_map"
+        )
+        self._primary_map_received = False
+        self._last_primary_map_time = 0.0
+        self._map_message_count = 0
+        self._last_map_diagnostic_state: tuple[int, int, int] | None = None
 
         # --- Map: /map (latched, from map_server) ---
         map_qos = QoSProfile(
@@ -102,12 +110,24 @@ class Ros2Client:
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
-        self.node.create_subscription(
+        self._map_subscription = self.node.create_subscription(
             OccupancyGrid,
-            os.getenv("ROBOT_UI_MAP_TOPIC", "/map"),
+            self._map_topic,
             self._map_callback,
             map_qos,
         )
+        self._reference_map_subscription = None
+        if self._reference_map_topic != self._map_topic:
+            self._reference_map_subscription = self.node.create_subscription(
+                OccupancyGrid,
+                self._reference_map_topic,
+                lambda message: self._map_callback(
+                    message,
+                    topic=self._reference_map_topic,
+                    primary=False,
+                ),
+                map_qos,
+            )
 
         # --- Pose: /amcl_pose (from AMCL) ---
         self.node.create_subscription(
@@ -246,6 +266,9 @@ class Ros2Client:
 
         # --- Lidar status timer ---
         self._lidar_check_timer = self.node.create_timer(2.0, self._check_lidar_status)
+        self._map_diagnostic_timer = self.node.create_timer(
+            5.0, self._report_map_subscription
+        )
 
         self.thread = threading.Thread(target=self._spin, name="robot-ui-ros2", daemon=True)
         self.thread.start()
@@ -258,17 +281,87 @@ class Ros2Client:
             if not self._closed:
                 self.log.exception("ROS 2 executor 异常退出")
 
-    def _map_callback(self, message: OccupancyGrid) -> None:
+    def _report_map_subscription(self) -> None:
+        primary_publishers = self.node.count_publishers(self._map_topic)
+        reference_publishers = self.node.count_publishers(self._reference_map_topic)
+        state = (
+            int(primary_publishers),
+            int(reference_publishers),
+            int(self._map_message_count),
+        )
+        if state == self._last_map_diagnostic_state:
+            return
+        self._last_map_diagnostic_state = state
+        environment = (
+            f"domain={os.getenv('ROS_DOMAIN_ID', 'unset')} "
+            f"rmw={os.getenv('RMW_IMPLEMENTATION', 'default')}"
+        )
+        if self._map_message_count:
+            self.log.info(
+                "地图订阅正常：%s publishers=%d，%s publishers=%d，messages=%d，%s",
+                self._map_topic,
+                primary_publishers,
+                self._reference_map_topic,
+                reference_publishers,
+                self._map_message_count,
+                environment,
+            )
+        elif primary_publishers or reference_publishers:
+            self.log.warning(
+                "已发现地图发布者但尚未收到兼容数据：%s publishers=%d，"
+                "%s publishers=%d，%s",
+                self._map_topic,
+                primary_publishers,
+                self._reference_map_topic,
+                reference_publishers,
+                environment,
+            )
+        else:
+            self.log.warning(
+                "尚未发现地图发布者：%s 与 %s，%s",
+                self._map_topic,
+                self._reference_map_topic,
+                environment,
+            )
+
+    def _map_callback(
+        self,
+        message: OccupancyGrid,
+        *,
+        topic: str | None = None,
+        primary: bool = True,
+    ) -> None:
+        logger = getattr(self, "log", logging.getLogger("ROS"))
+        topic = topic or getattr(self, "_map_topic", "/map")
+        if (
+            not primary
+            and time.monotonic() - getattr(self, "_last_primary_map_time", 0.0)
+            < 3.0
+        ):
+            return
         info = message.info
         width = int(info.width)
         height = int(info.height)
         # Some map servers republish the same latched OccupancyGrid. Hash the
         # raw signed-byte payload before the expensive Python PNG conversion
         # so an unchanged map never rebuilds or reuploads a texture.
-        if hasattr(message.data, "tobytes"):
-            raw_bytes = message.data.tobytes()
-        else:
-            raw_bytes = bytes((int(value) & 0xFF) for value in message.data)
+        try:
+            if hasattr(message.data, "tobytes"):
+                raw_bytes = message.data.tobytes()
+            else:
+                raw_bytes = bytes((int(value) & 0xFF) for value in message.data)
+        except (TypeError, ValueError, OverflowError):
+            logger.exception("地图数据转换失败：topic=%s", topic)
+            return
+        if width <= 0 or height <= 0 or len(message.data) != width * height:
+            logger.error(
+                "拒绝无效地图：topic=%s size=%dx%d data=%d",
+                topic,
+                width,
+                height,
+                len(message.data),
+            )
+            return
         signature = (
             width,
             height,
@@ -277,13 +370,18 @@ class Ros2Client:
             float(info.origin.position.y),
             zlib.crc32(raw_bytes) & 0xFFFFFFFF,
         )
+        if primary:
+            self._primary_map_received = True
+            self._last_primary_map_time = time.monotonic()
         if signature == self._last_map_signature:
             return
 
         image = occupancy_grid_png(message.data, width, height)
         if not image:
+            logger.error("地图 PNG 编码失败：topic=%s size=%dx%d", topic, width, height)
             return
         self._last_map_signature = signature
+        self._map_message_count = getattr(self, "_map_message_count", 0) + 1
         self.owner.update_map(
             {
                 "map_image": image,
@@ -294,6 +392,17 @@ class Ros2Client:
                 "map_origin_y": float(info.origin.position.y),
                 "map_revision": self.owner.snapshot.map_revision + 1,
             }
+        )
+        logger.info(
+            "地图帧已接收：topic=%s size=%dx%d resolution=%.3fm "
+            "origin=(%.3f,%.3f) revision=%d",
+            topic,
+            width,
+            height,
+            float(info.resolution),
+            float(info.origin.position.x),
+            float(info.origin.position.y),
+            self.owner.snapshot.map_revision,
         )
 
     def _update_pose(self, pose: Any) -> None:

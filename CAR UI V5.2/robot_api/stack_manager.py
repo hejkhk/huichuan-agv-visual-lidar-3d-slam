@@ -160,6 +160,12 @@ class SlamStackManager:
 
         environment = os.environ.copy()
         environment["ROS_DOMAIN_ID"] = environment.get("ROS_DOMAIN_ID", "88")
+        environment["RMW_IMPLEMENTATION"] = "rmw_cyclonedds_cpp"
+        dds_config = self.project_root / "visual_laser_slam" / "cyclonedds_dual_3d.xml"
+        if dds_config.is_file():
+            environment["CYCLONEDDS_URI"] = environment.get(
+                "DUAL_3D_CYCLONEDDS_URI", f"file://{dds_config}"
+            )
         environment["USE_RVIZ"] = environment.get("ROBOT_UI_START_RVIZ", "false")
         environment["PYTHONUNBUFFERED"] = "1"
         if shutil.which("stdbuf"):
@@ -171,7 +177,10 @@ class SlamStackManager:
                 header = (
                     f"\n{'=' * 72}\n"
                     f"{time.strftime('%Y-%m-%d %H:%M:%S')} UI START mode={mode} "
-                    f"domain={environment['ROS_DOMAIN_ID']} rviz={environment['USE_RVIZ']}\n"
+                    f"domain={environment['ROS_DOMAIN_ID']} "
+                    f"rmw={environment['RMW_IMPLEMENTATION']} "
+                    f"rviz={environment['USE_RVIZ']}\n"
+                    f"dds={environment.get('CYCLONEDDS_URI', 'default')}\n"
                     f"cwd={self.project_root}\n"
                     f"command={' '.join(command)}\n"
                     f"{'=' * 72}\n"

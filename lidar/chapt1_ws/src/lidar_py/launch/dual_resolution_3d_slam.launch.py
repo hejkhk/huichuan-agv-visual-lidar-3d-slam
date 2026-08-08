@@ -362,7 +362,10 @@ def generate_launch_description():
             "min_verify_tf_advance_sec": 0.50,
             "verify_timeout_sec": 8.0,
             "auto_retry_interval_sec": 5.0,
-            "max_auto_attempts": 5,
+            # Keep the strict corridor-ambiguity gate, but do not give up
+            # after only ~20 seconds of noisy startup scans.
+            "max_auto_attempts": 12,
+            "max_wait_sec": 180.0,
         }],
     )
 

@@ -141,6 +141,12 @@ fi
 
 export HUICHUAN_SLAM_ROOT="$ROOT_DIR"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-88}"
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+DDS_CONFIG="$ROOT_DIR/visual_laser_slam/cyclonedds_dual_3d.xml"
+[ -f "$DDS_CONFIG" ] || die "Missing CycloneDDS config: $DDS_CONFIG"
+export CYCLONEDDS_URI="${DUAL_3D_CYCLONEDDS_URI:-file://$DDS_CONFIG}"
+export ROBOT_UI_MAP_TOPIC="${ROBOT_UI_MAP_TOPIC:-/map}"
+export ROBOT_UI_REFERENCE_MAP_TOPIC="${ROBOT_UI_REFERENCE_MAP_TOPIC:-/localization_reference_map}"
 export ROBOT_UI_START_RVIZ="${ROBOT_UI_START_RVIZ:-false}"
 export ROBOT_UI_FOREGROUND=1
 

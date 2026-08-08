@@ -445,6 +445,9 @@ for required in (
 localization_launch = (
     root / "launch" / "cartographer_scan_v2_localization_launch.py"
 ).read_text(encoding="utf-8")
+dual_launch = (
+    root / "launch" / "dual_resolution_3d_slam.launch.py"
+).read_text(encoding="utf-8")
 if "-start_trajectory_with_default_topics=false" not in localization_launch:
     raise SystemExit("localization must defer the active trajectory until matching")
 reloc = (root / "lidar_py" / "cartographer_reloc.py").read_text(encoding="utf-8")
@@ -503,6 +506,8 @@ for required in (
             f"startup relocalizer freshness contract missing: {required}")
 if "retry_wait" not in reloc or "max_auto_attempts" not in reloc:
     raise SystemExit("startup relocalizer is missing bounded automatic retries")
+if '"max_auto_attempts": 12' not in dual_launch:
+    raise SystemExit("startup relocalizer retry budget regressed below the Jetson profile")
 if "wait_topic /cartographer_pose_odom 30" not in runner:
     raise SystemExit("mapping launcher must still verify Cartographer corrected pose")
 for required in (
@@ -510,6 +515,7 @@ for required in (
         ".short-goal-bt-source.sha256", "skipping colcon",
         "wait_transient_topic /localization_reference_map 30",
         "wait_topic_publisher /map_updates 15",
+        "confirmed by in-process mutable map node",
         "wait_topic /slam_correction_hold 10",
         "resource_usage.csv"):
     if required not in runner:

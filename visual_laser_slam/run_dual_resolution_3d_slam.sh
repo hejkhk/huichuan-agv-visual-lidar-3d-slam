@@ -1575,8 +1575,20 @@ if is_true "$LOCALIZATION_MODE"; then
     die "Static localization reference map did not publish /localization_reference_map"
   wait_transient_topic /map 30 || \
     die "Mutable navigation map did not publish its initial /map"
-  wait_topic_publisher /map_updates 15 || \
-    die "Mutable navigation map did not advertise /map_updates"
+  if ! wait_topic_publisher /map_updates 15; then
+    # ros2cli graph discovery can lag badly while the Jetson is saturated.
+    # The C++ node emits this status only after both publishers are created,
+    # and a positive update count additionally proves real publication. Do
+    # not tear down a healthy stack because a short-lived CLI participant did
+    # not discover the endpoint in time.
+    if grep -Eq \
+        'NAV_MAP_STATUS loaded=true .*updates=[1-9][0-9]*|Mutable navigation map: .*output=/map \+ /map_updates' \
+        "$RUNTIME_LOG"; then
+      log "[ready] publisher /map_updates (confirmed by in-process mutable map node)"
+    else
+      die "Mutable navigation map did not advertise /map_updates"
+    fi
+  fi
   # In localization mode Cartographer deliberately starts with no active
   # trajectory.  /cartographer_pose_odom is created only after the scan-to-map
   # relocalizer matches the frozen state, so waiting for it here deadlocks the

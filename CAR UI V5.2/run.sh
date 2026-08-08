@@ -11,6 +11,20 @@ if [[ -z "${HUICHUAN_SLAM_ROOT:-}" ]] && \
   export HUICHUAN_SLAM_ROOT="$(cd "$UI_ROOT/.." && pwd)"
 fi
 
+# Match the Huichuan stack's DDS process exactly. A ROS node can initialize
+# successfully with another RMW implementation yet still discover no map
+# publishers, which previously left the UI waiting with no useful diagnosis.
+if [[ -n "${HUICHUAN_SLAM_ROOT:-}" ]]; then
+  DDS_CONFIG="$HUICHUAN_SLAM_ROOT/visual_laser_slam/cyclonedds_dual_3d.xml"
+  if [[ -f "$DDS_CONFIG" ]]; then
+    export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    export CYCLONEDDS_URI="${DUAL_3D_CYCLONEDDS_URI:-file://$DDS_CONFIG}"
+  fi
+fi
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-88}"
+export ROBOT_UI_MAP_TOPIC="${ROBOT_UI_MAP_TOPIC:-/map}"
+export ROBOT_UI_REFERENCE_MAP_TOPIC="${ROBOT_UI_REFERENCE_MAP_TOPIC:-/localization_reference_map}"
+
 # The UI never owns an STM32 serial port; chassis_node remains the sole serial
 # endpoint. main.py applies DDS domain 88 unless settings or the environment
 # explicitly select another domain.

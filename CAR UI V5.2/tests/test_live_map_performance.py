@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from array import array
+import time
 from types import SimpleNamespace
 
 from robot_api.ros2_client import Ros2Client
@@ -49,3 +50,40 @@ def test_changed_map_still_publishes_a_new_revision() -> None:
     client._map_callback(_message(array("b", [100, 0, -1, 51])))
 
     assert [item["map_revision"] for item in client.owner.updates] == [1, 2]
+
+
+def test_reference_map_is_a_fallback_until_primary_map_arrives() -> None:
+    client = Ros2Client.__new__(Ros2Client)
+    client.owner = _Owner()
+    client._last_map_signature = None
+    client._primary_map_received = False
+    client._last_primary_map_time = 0.0
+    client._map_message_count = 0
+
+    client._map_callback(
+        _message(array("b", [100, 0, -1, 40])),
+        topic="/localization_reference_map",
+        primary=False,
+    )
+    client._map_callback(
+        _message(array("b", [100, 0, -1, 50])),
+        topic="/map",
+        primary=True,
+    )
+    client._map_callback(
+        _message(array("b", [100, 0, -1, 60])),
+        topic="/localization_reference_map",
+        primary=False,
+    )
+
+    assert client._primary_map_received is True
+    assert [item["map_revision"] for item in client.owner.updates] == [1, 2]
+    assert client.owner.updates[-1]["map_image"]
+
+    client._last_primary_map_time = time.monotonic() - 4.0
+    client._map_callback(
+        _message(array("b", [100, 0, -1, 60])),
+        topic="/localization_reference_map",
+        primary=False,
+    )
+    assert [item["map_revision"] for item in client.owner.updates] == [1, 2, 3]
